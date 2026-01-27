@@ -1,1 +1,5 @@
-babel==2.14.0
+streamlit
+pandas
+numpy
+plotly
+pyarrow
