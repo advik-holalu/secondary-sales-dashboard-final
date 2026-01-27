@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Mac
+.DS_Store
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Data: ignore raw/huge sources
+*.xlsx
+*.xls
+*.csv
+*.zip
+*.7z
+
+# Keep pre-aggregated parquets (do NOT ignore data_agg)
+# If you have any other big raw folders, ignore them:
+raw_data/
+input/
+shopifydata/
+
+# Raw / local-only data
+data_raw/
+preprocess/
+run_all_parquets.py
+test.py
+
+# If ui_utils.py is NOT imported in app.py, ignore it
+# (we will confirm in next step)
+# ui_utils.py
