@@ -1033,6 +1033,17 @@ with tab4:
         )
         return df
 
+    # --------------------------------------------------------
+    # INDIAN Y-AXIS HELPER (NEW)
+    # --------------------------------------------------------
+    def apply_indian_yaxis(fig, max_val):
+        ticks = np.linspace(0, max_val, 6)
+        fig.update_yaxes(
+            tickvals=ticks,
+            ticktext=[format_indian(v, decimals=0) for v in ticks]
+        )
+        return fig
+
     # ========================================================
     # GRAPH 1 — GO DESi vs INDUSTRY SIZE
     # ========================================================
@@ -1082,6 +1093,12 @@ with tab4:
         trace.textposition = "outside"
         trace.hoverinfo = "skip"
 
+    y_max = max(
+        comp["Industry Size"].max(),
+        comp["GO DESi GMV"].max()
+    )
+    fig1 = apply_indian_yaxis(fig1, y_max)
+
     st.plotly_chart(fig1, use_container_width=True)
 
     comp_disp = comp.copy()
@@ -1123,6 +1140,8 @@ with tab4:
     )
 
     fig2.update_traces(textposition="top center")
+    fig2 = apply_indian_yaxis(fig2, trend["Industry Size"].max())
+
     st.plotly_chart(fig2, use_container_width=True)
 
     # ========================================================
@@ -1155,6 +1174,8 @@ with tab4:
     )
 
     fig3.update_traces(textposition="top center")
+    fig3 = apply_indian_yaxis(fig3, gmv_trend["GO DESi GMV"].max())
+
     st.plotly_chart(fig3, use_container_width=True)
 
 # ------------------------------------------------------------
