@@ -195,7 +195,6 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "User Guide"
 ])
 
-
 # ============================================================
 # TAB 1 — SALES OVERVIEW
 # ============================================================
@@ -223,10 +222,37 @@ with tab1:
 
         state_sel = st.multiselect("State", state_opts)
 
-        cat_sel = st.multiselect(
-            "Category",
-            sorted(df["Primary Cat"].dropna().unique())
+        parent_cat_sel = st.multiselect(
+            "Parent Category",
+            sorted(df["Parent Category"].dropna().unique())
         )
+
+        if parent_cat_sel:
+            l1_opts = sorted(
+                df[df["Parent Category"].isin(parent_cat_sel)]["L1 Category"].dropna().unique()
+            )
+        else:
+            l1_opts = sorted(df["L1 Category"].dropna().unique())
+
+        l1_sel = st.multiselect("L1 Category", l1_opts)
+
+        if l1_sel:
+            l2_opts = sorted(
+                df[df["L1 Category"].isin(l1_sel)]["L2 Category"].dropna().unique()
+            )
+        else:
+            l2_opts = sorted(df["L2 Category"].dropna().unique())
+
+        l2_sel = st.multiselect("L2 Category", l2_opts)
+
+        if l2_sel:
+            l3_opts = sorted(
+                df[df["L2 Category"].isin(l2_sel)]["L3 Category"].dropna().unique()
+            )
+        else:
+            l3_opts = sorted(df["L3 Category"].dropna().unique())
+
+        l3_sel = st.multiselect("L3 Category", l3_opts)
 
         platform_sel = st.multiselect(
             "Platform",
@@ -234,27 +260,30 @@ with tab1:
         )
 
     # ------------------------------------------------------------
-    # SHARED FILTER HELPER (TAB 1)
+    # SHARED FILTER HELPER
     # ------------------------------------------------------------
-    def apply_tab1_filters(df):
-        out = df.copy()
+    def apply_tab1_filters(dfin):
+        out = dfin.copy()
 
-        if region_sel and "Region Name" in out.columns:
+        if region_sel:
             out = out[out["Region Name"].isin(region_sel)]
-
-        if state_sel and "State Name" in out.columns:
+        if state_sel:
             out = out[out["State Name"].isin(state_sel)]
-
-        if cat_sel and "Primary Cat" in out.columns:
-            out = out[out["Primary Cat"].isin(cat_sel)]
-
-        if platform_sel and "Platform" in out.columns:
+        if parent_cat_sel:
+            out = out[out["Parent Category"].isin(parent_cat_sel)]
+        if l1_sel:
+            out = out[out["L1 Category"].isin(l1_sel)]
+        if l2_sel:
+            out = out[out["L2 Category"].isin(l2_sel)]
+        if l3_sel:
+            out = out[out["L3 Category"].isin(l3_sel)]
+        if platform_sel:
             out = out[out["Platform"].isin(platform_sel)]
 
         return out
 
     # ------------------------------------------------------------
-    # APPLY FILTERS — BASE DATA
+    # APPLY FILTERS
     # ------------------------------------------------------------
     df_filt = apply_tab1_filters(df)
 
@@ -262,9 +291,6 @@ with tab1:
         st.warning("No data for selected filters.")
         st.stop()
 
-    # ------------------------------------------------------------
-    # MONTH ORDER
-    # ------------------------------------------------------------
     month_order = (
         df_filt[["MonthNum", "MonthLabel"]]
         .drop_duplicates()
@@ -273,43 +299,31 @@ with tab1:
     )
 
     # ============================================================
-    # SECTION 1 — CATEGORY-WISE TREND
+    # SECTION 1 — CATEGORY TREND (PARENT CATEGORY)
     # ============================================================
-    Q1_KEYS = {"Apr", "May", "Jun"}
-
-    q1 = df_filt[df_filt["MonthLabel"].isin(Q1_KEYS)]
-    q1_benchmark = (
-        q1.groupby(["Year", "MonthLabel"], as_index=False)[metric]
-        .sum()[metric].mean()
-        if not q1.empty else np.nan
-    )
+    st.title("Secondary Sales Overview")
+    st.subheader("Parent Category-wise Trend")
 
     timeline = (
         df_filt
         .groupby(
-            ["Year", "MonthNum", "MonthLabel", "Primary Cat"],
+            ["Year", "MonthNum", "MonthLabel", "Parent Category"],
             as_index=False
         )[metric]
         .sum()
         .sort_values(["Year", "MonthNum"])
     )
 
-    st.title("Secondary Sales Overview")
-    st.subheader("Category-wise Trend (Dynamic Months) with Q1 Benchmark")
-
     fig = px.line(
         timeline,
         x="MonthLabel",
         y=metric,
-        color="Primary Cat",
+        color="Parent Category",
         markers=True,
         text=timeline[metric].apply(format_indian),
         category_orders={"MonthLabel": month_order}
     )
 
-    # ------------------------------------------------------------
-    # INDIAN Y-AXIS TICKS (L / Cr)
-    # ------------------------------------------------------------
     y_max = timeline[metric].max()
     y_ticks = np.linspace(0, y_max, 6)
 
@@ -318,22 +332,10 @@ with tab1:
         ticktext=[format_indian(v, decimals=0) for v in y_ticks]
     )
 
-    # ------------------------------------------------------------
-    # Q1 BENCHMARK
-    # ------------------------------------------------------------
-    if not np.isnan(q1_benchmark):
-        fig.add_hline(
-            y=q1_benchmark,
-            line_dash="dot",
-            line_color="red",
-            annotation_text=f"Q1 Avg: {format_indian(q1_benchmark)}",
-            annotation_position="top left"
-        )
-
     st.plotly_chart(fig, use_container_width=True)
 
     # ============================================================
-    # SECTION 2 — DONUTS (Q1 / Q2 / Q3)
+    # SECTION 2 — DONUTS
     # ============================================================
     st.subheader("Sales Distribution — Q1, Q2, Q3")
 
@@ -345,69 +347,38 @@ with tab1:
         c1, c2 = st.columns(2)
 
         with c1:
-            st.markdown(f"**Region-wise Share — {title}**")
             reg = dfq.groupby("Region Name", as_index=False)[metric].sum()
-            if reg.empty:
-                st.info("No data.")
-            else:
-                fig = px.pie(reg, names="Region Name", values=metric, hole=0.45)
-                fig.update_traces(
-                    textinfo="percent",
-                    textposition="inside"
-                )
-                st.plotly_chart(fig, use_container_width=True)
+            fig = px.pie(reg, names="Region Name", values=metric, hole=0.45)
+            st.plotly_chart(fig, use_container_width=True)
 
         with c2:
-            st.markdown(f"**State-wise Share — {title}**")
             stt = dfq.groupby("State Name", as_index=False)[metric].sum()
-            total_val = stt[metric].sum()
-            stt["Share %"] = (stt[metric] / total_val * 100).round(1)
-            stt["State Label"] = stt["State Name"] + " (" + stt["Share %"].astype(str) + "%)"
+            fig = px.pie(stt, names="State Name", values=metric, hole=0.45)
+            st.plotly_chart(fig, use_container_width=True)
 
-            if stt.empty:
-                st.info("No data.")
-            else:
-                fig = px.pie(stt, names="State Label", values=metric, hole=0.45)
-                fig.update_traces(
-                    textinfo="percent",
-                    textposition="inside"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-    donut_pair("Q1", "Q1 (Apr–Jun)")
-    donut_pair("Q2", "Q2 (Jul–Sep)")
-    donut_pair("Q3", "Q3 (Oct–Dec)")
+    donut_pair("Q1", "Q1")
+    donut_pair("Q2", "Q2")
+    donut_pair("Q3", "Q3")
 
     # ============================================================
-    # SECTION 3 — TOP 10 SKUs
+    # SECTION 3 — TOP SKUs
     # ============================================================
     st.subheader(f"Top 10 SKUs — Quarter-wise ({metric})")
 
     sku_base = apply_tab1_filters(sku_df)
 
-    def render_top_skus_table(quarter, title):
-        st.markdown(f"**{title}**")
-
+    def render_top_skus_table(quarter):
         dfq = sku_base[sku_base["Quarter"] == quarter]
-
         if dfq.empty:
-            st.info("No SKUs match the selected filters.")
             return
 
-        # Sort, take Top 10, remove random index
         dfq = (
-            dfq
-            .sort_values(metric, ascending=False)
+            dfq.sort_values(metric, ascending=False)
             .head(10)
             .reset_index(drop=True)
         )
 
-        # Add serial number
         dfq.insert(0, "S.No", range(1, len(dfq) + 1))
-
-        total_val = dfq[metric].sum()
-
-        dfq["% of Total"] = (dfq[metric] / total_val * 100).apply(format_pct)
         dfq[f"{metric} (₹)"] = dfq[metric].apply(format_indian)
 
         st.dataframe(
@@ -415,32 +386,25 @@ with tab1:
                 [
                     "S.No",
                     "Item Name",
-                    "Primary Cat",
+                    "Parent Category",
+                    "L1 Category",
                     f"{metric} (₹)",
-                    "% of Total",
                 ]
             ],
             use_container_width=True
         )
 
-    render_top_skus_table("Q1", "Q1 (Apr–Jun)")
-    render_top_skus_table("Q2", "Q2 (Jul–Sep)")
-    render_top_skus_table("Q3", "Q3 (Oct–Dec)")
+    render_top_skus_table("Q1")
+    render_top_skus_table("Q2")
+    render_top_skus_table("Q3")
 
     # ============================================================
-    # SECTION 4 — STATE PERFORMANCE (Q1 vs Q2 vs Q3)
+    # SECTION 4 — STATE PERFORMANCE
     # ============================================================
     st.subheader("State Performance — Q1 vs Q2 vs Q3")
 
     df_state = apply_tab1_filters(state_q_df)
 
-    if df_state.empty:
-        st.info("No data available for selected filters.")
-        st.stop()
-
-    # ----------------------------
-    # Quarter-wise aggregation
-    # ----------------------------
     q1 = (
         df_state[df_state["Quarter"] == "Q1"]
         .groupby("State Name", as_index=False)[metric]
@@ -462,79 +426,25 @@ with tab1:
         .rename(columns={metric: "Q3"})
     )
 
-    # ----------------------------
-    # Merge all quarters
-    # ----------------------------
     merged = (
         q1.merge(q2, on="State Name", how="outer")
         .merge(q3, on="State Name", how="outer")
         .fillna(0)
     )
 
-    # ----------------------------
-    # Combined sales (ordering column)
-    # ----------------------------
-    merged["Total (Q1+Q2+Q3)"] = merged["Q1"] + merged["Q2"] + merged["Q3"]
 
-    # ----------------------------
-    # Delta calculations
-    # ----------------------------
-    merged["Q2 Δ% vs Q1"] = (
-        (merged["Q2"] - merged["Q1"]) /
-        merged["Q1"].replace(0, np.nan) * 100
-    )
+    merged["Total"] = merged["Q1"] + merged["Q2"] + merged["Q3"]
+    merged = merged.sort_values("Total", ascending=False)
 
-    merged["Q3 Δ% vs Q2"] = (
-        (merged["Q3"] - merged["Q2"]) /
-        merged["Q2"].replace(0, np.nan) * 100
-    )
-
-    # ----------------------------
-    # Share % based on Q3
-    # ----------------------------
-    total_q3 = merged["Q3"].sum()
-
-    merged["Share % (Q3)"] = (
-        merged["Q3"] / total_q3 * 100
-    )
-
-    # ----------------------------
-    # Formatting
-    # ----------------------------
     merged["Q1 (₹)"] = merged["Q1"].apply(format_indian)
     merged["Q2 (₹)"] = merged["Q2"].apply(format_indian)
     merged["Q3 (₹)"] = merged["Q3"].apply(format_indian)
 
-    merged["Q2 Δ% vs Q1"] = merged["Q2 Δ% vs Q1"].apply(format_pct)
-    merged["Q3 Δ% vs Q2"] = merged["Q3 Δ% vs Q2"].apply(format_pct)
-    merged["Share % (Q3)"] = merged["Share % (Q3)"].apply(format_pct)
-
-    # ----------------------------
-    # Final ordering + Serial No
-    # ----------------------------
-    merged = (
-        merged
-        .sort_values("Total (Q1+Q2+Q3)", ascending=False)
-        .reset_index(drop=True)
-    )
-
     merged.insert(0, "S.No", range(1, len(merged) + 1))
 
-    # ----------------------------
-    # Display
-    # ----------------------------
     st.dataframe(
         merged[
-            [
-                "S.No",
-                "State Name",
-                "Q1 (₹)",
-                "Q2 (₹)",
-                "Q3 (₹)",
-                "Q2 Δ% vs Q1",
-                "Q3 Δ% vs Q2",
-                "Share % (Q3)",
-            ]
+            ["S.No", "State Name", "Q1 (₹)", "Q2 (₹)", "Q3 (₹)"]
         ],
         use_container_width=True
     )
@@ -558,17 +468,45 @@ with tab2:
             key="metric_tab2"
         )
 
-        cat_tab2 = st.multiselect(
-            "Category (Tab 2)",
-            sorted(tab2_df["Primary Cat"].dropna().unique()),
-            default=[],
-            key="cat_tab2"
+        parent_cat_sel = st.multiselect(
+            "Parent Category (Tab 2)",
+            sorted(tab2_df["Parent Category"].dropna().unique()),
+            key="parent_tab2"
         )
 
-        platform_tab2 = st.multiselect(
+        if parent_cat_sel:
+            l1_opts = sorted(
+                tab2_df[tab2_df["Parent Category"].isin(parent_cat_sel)]["L1 Category"]
+                .dropna().unique()
+            )
+        else:
+            l1_opts = sorted(tab2_df["L1 Category"].dropna().unique())
+
+        l1_sel = st.multiselect("L1 Category (Tab 2)", l1_opts, key="l1_tab2")
+
+        if l1_sel:
+            l2_opts = sorted(
+                tab2_df[tab2_df["L1 Category"].isin(l1_sel)]["L2 Category"]
+                .dropna().unique()
+            )
+        else:
+            l2_opts = sorted(tab2_df["L2 Category"].dropna().unique())
+
+        l2_sel = st.multiselect("L2 Category (Tab 2)", l2_opts, key="l2_tab2")
+
+        if l2_sel:
+            l3_opts = sorted(
+                tab2_df[tab2_df["L2 Category"].isin(l2_sel)]["L3 Category"]
+                .dropna().unique()
+            )
+        else:
+            l3_opts = sorted(tab2_df["L3 Category"].dropna().unique())
+
+        l3_sel = st.multiselect("L3 Category (Tab 2)", l3_opts, key="l3_tab2")
+
+        platform_sel = st.multiselect(
             "Platform (Tab 2)",
             sorted(tab2_df["Platform"].dropna().unique()),
-            default=[],
             key="platform_tab2"
         )
 
@@ -577,11 +515,16 @@ with tab2:
     # --------------------------------------------------------
     df2 = tab2_df.copy()
 
-    if cat_tab2:
-        df2 = df2[df2["Primary Cat"].isin(cat_tab2)]
-
-    if platform_tab2:
-        df2 = df2[df2["Platform"].isin(platform_tab2)]
+    if parent_cat_sel:
+        df2 = df2[df2["Parent Category"].isin(parent_cat_sel)]
+    if l1_sel:
+        df2 = df2[df2["L1 Category"].isin(l1_sel)]
+    if l2_sel:
+        df2 = df2[df2["L2 Category"].isin(l2_sel)]
+    if l3_sel:
+        df2 = df2[df2["L3 Category"].isin(l3_sel)]
+    if platform_sel:
+        df2 = df2[df2["Platform"].isin(platform_sel)]
 
     if df2.empty:
         st.warning("No data available for selected filters.")
@@ -601,13 +544,13 @@ with tab2:
         top_states = state_tot[state_tot["CumShare"] <= 70]["State Name"].tolist()
         return top_states or state_tot.head(1)["State Name"].tolist()
 
-    # ========================================================
-    # SINGLE VISUAL — TOP MARKETS TREND
-    # ========================================================
+    # --------------------------------------------------------
+    # BASELINE QUARTER
+    # --------------------------------------------------------
     st.subheader("Top Markets Trend — Based on Selected Baseline Quarter")
 
     baseline_q = st.selectbox(
-        "Baseline Quarter for Top 70% States",
+        "Baseline Quarter",
         sorted(df2["Quarter"].unique()),
         index=0
     )
@@ -617,15 +560,9 @@ with tab2:
 
     plot_df = df2[df2["State Name"].isin(top_states)]
 
-    # Legend order by total contribution
-    state_order = (
-        plot_df
-        .groupby("State Name", as_index=False)[metric_tab2]
-        .sum()
-        .sort_values(metric_tab2, ascending=False)["State Name"]
-        .tolist()
-    )
-
+    # --------------------------------------------------------
+    # MONTH ORDER
+    # --------------------------------------------------------
     month_order = (
         plot_df[["MonthNum", "MonthLabel"]]
         .drop_duplicates()
@@ -635,17 +572,34 @@ with tab2:
 
     trend_df = (
         plot_df
-        .groupby(["State Name", "MonthNum", "MonthLabel"], as_index=False)[metric_tab2]
+        .groupby(
+            ["State Name", "MonthNum", "MonthLabel"],
+            as_index=False
+        )[metric_tab2]
         .sum()
         .sort_values("MonthNum")
     )
 
     trend_df["MonthLabel"] = pd.Categorical(
         trend_df["MonthLabel"],
-        month_order,
+        categories=month_order,
         ordered=True
     )
 
+    # --------------------------------------------------------
+    # LEGEND ORDER (BY TOTAL CONTRIBUTION)
+    # --------------------------------------------------------
+    state_order = (
+        trend_df
+        .groupby("State Name", as_index=False)[metric_tab2]
+        .sum()
+        .sort_values(metric_tab2, ascending=False)["State Name"]
+        .tolist()
+    )
+
+    # --------------------------------------------------------
+    # PLOT
+    # --------------------------------------------------------
     fig = px.line(
         trend_df,
         x="MonthLabel",
@@ -658,9 +612,9 @@ with tab2:
 
     fig.update_traces(textposition="top center")
 
-    # Indian Y-axis (L / Cr)
     y_max = trend_df[metric_tab2].max()
     y_ticks = np.linspace(0, y_max, 6)
+
     fig.update_yaxes(
         tickvals=y_ticks,
         ticktext=[format_indian(v, decimals=0) for v in y_ticks]
@@ -668,9 +622,6 @@ with tab2:
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # --------------------------------------------------------
-    # EXPLANATION (OPTIONAL BUT RECOMMENDED)
-    # --------------------------------------------------------
     st.caption(
         "States are selected based on the chosen baseline quarter contributing the first "
         "70% of sales and are tracked consistently across all months."
@@ -702,16 +653,29 @@ with tab3:
             index=0
         )
 
-        cat_sel = st.multiselect(
-            "Category (Tab 3)",
-            sorted(tab3_month_df["Primary Cat"].dropna().unique()),
-            default=[]
+        parent_sel = st.multiselect(
+            "Parent Category (Tab 3)",
+            sorted(tab3_month_df["Parent Category"].dropna().unique())
+        )
+
+        l1_sel = st.multiselect(
+            "L1 Category (Tab 3)",
+            sorted(tab3_month_df["L1 Category"].dropna().unique())
+        )
+
+        l2_sel = st.multiselect(
+            "L2 Category (Tab 3)",
+            sorted(tab3_month_df["L2 Category"].dropna().unique())
+        )
+
+        l3_sel = st.multiselect(
+            "L3 Category (Tab 3)",
+            sorted(tab3_month_df["L3 Category"].dropna().unique())
         )
 
         platform_sel = st.multiselect(
             "Platform (Tab 3)",
-            sorted(tab3_month_df["Platform"].dropna().unique()),
-            default=[]
+            sorted(tab3_month_df["Platform"].dropna().unique())
         )
 
     # ----------------------------
@@ -720,9 +684,21 @@ with tab3:
     df_month = tab3_month_df.copy()
     df_total = tab3_total_df.copy()
 
-    if cat_sel:
-        df_month = df_month[df_month["Primary Cat"].isin(cat_sel)]
-        df_total = df_total[df_total["Primary Cat"].isin(cat_sel)]
+    if parent_sel:
+        df_month = df_month[df_month["Parent Category"].isin(parent_sel)]
+        df_total = df_total[df_total["Parent Category"].isin(parent_sel)]
+
+    if l1_sel:
+        df_month = df_month[df_month["L1 Category"].isin(l1_sel)]
+        df_total = df_total[df_total["L1 Category"].isin(l1_sel)]
+
+    if l2_sel:
+        df_month = df_month[df_month["L2 Category"].isin(l2_sel)]
+        df_total = df_total[df_total["L2 Category"].isin(l2_sel)]
+
+    if l3_sel:
+        df_month = df_month[df_month["L3 Category"].isin(l3_sel)]
+        df_total = df_total[df_total["L3 Category"].isin(l3_sel)]
 
     if platform_sel:
         df_month = df_month[df_month["Platform"].isin(platform_sel)]
@@ -733,10 +709,12 @@ with tab3:
         st.stop()
 
     # ----------------------------
-    # TOP 70% STATES (FULL PERIOD)
+    # TOP 70% STATES (BASED ON BASELINE QUARTER)
     # ----------------------------
+    baseline_df = df_month[df_month["Quarter"] == baseline_q]
+
     state_rank = (
-        df_total
+        baseline_df
         .groupby("State Name", as_index=False)[metric]
         .sum()
         .sort_values(metric, ascending=False)
@@ -752,31 +730,27 @@ with tab3:
     df_month = df_month[df_month["State Name"].isin(top_states)]
 
     # ----------------------------
-    # BASELINE vs COMPARE (AVG OF MONTHS)
+    # BASELINE vs COMPARE (MONTH AVG)
     # ----------------------------
     base_avg = (
         df_month[df_month["Quarter"] == baseline_q]
         .groupby("State Name", as_index=False)[metric]
         .mean()
-        .rename(columns={metric: "Baseline_avg"})
+        .rename(columns={metric: "Baseline"})
     )
 
     comp_avg = (
         df_month[df_month["Quarter"] == compare_q]
         .groupby("State Name", as_index=False)[metric]
         .mean()
-        .rename(columns={metric: "Compare_avg"})
+        .rename(columns={metric: "Compare"})
     )
 
-    growth_df = base_avg.merge(comp_avg, on="State Name", how="outer")
-
-    for col in ["Baseline_avg", "Compare_avg"]:
-        if col in growth_df.columns:
-            growth_df[col] = growth_df[col].fillna(0)
+    growth_df = base_avg.merge(comp_avg, on="State Name", how="outer").fillna(0)
 
     growth_df["Growth %"] = (
-        (growth_df["Compare_avg"] - growth_df["Baseline_avg"]) /
-        growth_df["Baseline_avg"].replace(0, np.nan) * 100
+        (growth_df["Compare"] - growth_df["Baseline"])
+        / growth_df["Baseline"].replace(0, np.nan) * 100
     )
 
     # ----------------------------
@@ -795,7 +769,7 @@ with tab3:
     )
 
     # ----------------------------
-    # A. GROWTH & LAGGARD BARS
+    # VISUALS
     # ----------------------------
     c1, c2 = st.columns(2)
 
@@ -812,11 +786,7 @@ with tab3:
                 text=growth_pos["Growth %"].apply(format_pct)
             )
             fig.update_traces(textposition="outside")
-            st.plotly_chart(
-                fig,
-                use_container_width=True,
-                key="tab3_growth_bar"
-            )
+            st.plotly_chart(fig, use_container_width=True)
 
     with c2:
         st.subheader(f"Top Laggards — {compare_q} vs {baseline_q}")
@@ -831,124 +801,7 @@ with tab3:
                 text=growth_neg["Growth %"].apply(format_pct)
             )
             fig.update_traces(textposition="outside")
-            st.plotly_chart(
-                fig,
-                use_container_width=True,
-                key="tab3_laggards_bar"
-            )
-
-    # ----------------------------
-    # B. BENCHMARK SHIFT (DUMBBELL)
-    # ----------------------------
-    st.subheader(f"Benchmark Shift — {baseline_q} ● vs {compare_q} ○")
-
-    shown = pd.concat([growth_pos, growth_neg]).drop_duplicates("State Name")
-
-    if shown.empty:
-        st.info("No states to display.")
-    else:
-        fig = px.scatter(
-            shown,
-            x="Baseline_avg",
-            y="State Name",
-            text=shown["Baseline_avg"].apply(format_indian),
-            labels={"Baseline_avg": metric},
-        )
-
-        fig.update_traces(textposition="middle right")
-
-        fig.add_scatter(
-            x=shown["Compare_avg"],
-            y=shown["State Name"],
-            mode="markers+text",
-            text=shown["Compare_avg"].apply(format_indian),
-            textposition="middle left",
-            marker_symbol="circle-open",
-            name=compare_q
-        )
-
-        for _, r in shown.iterrows():
-            fig.add_shape(
-                type="line",
-                x0=r["Baseline_avg"],
-                x1=r["Compare_avg"],
-                y0=r["State Name"],
-                y1=r["State Name"],
-                line=dict(color="gray")
-            )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True,
-            key="tab3_benchmark_shift"
-        )
-
-    # ----------------------------
-    # C. DRILL-DOWN (MONTHLY)
-    # ----------------------------
-    st.subheader("Drill-down — Monthly Trends")
-
-    month_order = (
-        df_month[["MonthNum", "MonthLabel"]]
-        .drop_duplicates()
-        .sort_values("MonthNum")["MonthLabel"]
-        .tolist()
-    )
-
-    def plot_states(states, label):
-        if not states:
-            return
-
-        temp = df_month[df_month["State Name"].isin(states)]
-        timeline = (
-            temp
-            .groupby(["State Name", "MonthNum", "MonthLabel"], as_index=False)[metric]
-            .sum()
-            .sort_values("MonthNum")
-        )
-
-        timeline["MonthLabel"] = pd.Categorical(
-            timeline["MonthLabel"], month_order, ordered=True
-        )
-
-        fig = px.line(
-            timeline,
-            x="MonthLabel",
-            y=metric,
-            color="State Name",
-            markers=True,
-            text=timeline[metric].apply(format_indian)
-        )
-
-        fig.update_traces(textposition="top center")
-        fig.update_yaxes(tickformat=",")
-
-        safe_key = label.lower().replace(" ", "_").replace("—", "-")
-
-        st.markdown(f"**{label}**")
-        st.plotly_chart(
-            fig,
-            use_container_width=True,
-            key=f"tab3_drilldown_{safe_key}"
-        )
-
-    if not growth_pos.empty:
-        sel_g = st.multiselect(
-            "Growth States",
-            sorted(growth_pos["State Name"]),
-            default=sorted(growth_pos["State Name"]),
-            key="tab3_growth_states"
-        )
-        plot_states(sel_g, "Growth States — Monthly")
-
-    if not growth_neg.empty:
-        sel_l = st.multiselect(
-            "Laggard States",
-            sorted(growth_neg["State Name"]),
-            default=sorted(growth_neg["State Name"]),
-            key="tab3_laggard_states"
-        )
-        plot_states(sel_l, "Laggard States — Monthly")
+            st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
 # TAB 4 — METRO INDUSTRY VIEW (FIXED DEFAULT FILTER BEHAVIOR)
