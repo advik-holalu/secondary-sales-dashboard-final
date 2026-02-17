@@ -134,6 +134,9 @@ pt_df = load_tab5_ptype_base()
 tab5_month_df = load_tab5_ptype_month()
 tab5_variant_df = load_tab5_ptype_variant()
 
+# Load once at top of file (not inside tab)
+tab5_df = pd.read_parquet("data_agg/tab5_ptype_final.parquet")
+
 # ------------------------------------------------------------
 # GLOBAL FY FILTER (CANONICAL TIME MODEL)
 # ------------------------------------------------------------
@@ -498,8 +501,19 @@ with tab1:
 
         st.markdown(f"### {fy_quarter}")
 
+        # 🔥 Re-aggregate to SKU level (remove state/region/platform grain)
         dfq = (
-            dfq.sort_values(metric, ascending=False)
+            dfq
+            .groupby(
+                ["Item Name", "Parent Category", "L1 Category"],
+                as_index=False
+            )[metric]
+            .sum()
+        )
+
+        dfq = (
+            dfq
+            .sort_values(metric, ascending=False)
             .head(10)
             .reset_index(drop=True)
         )
@@ -565,7 +579,6 @@ with tab1:
         pivot,
         use_container_width=True
     )
-
     
 # ============================================================
 # TAB 2 — TOP MARKETS (FY SAFE)
@@ -1086,15 +1099,17 @@ with tab4:
     # ========================================================
     st.subheader("GO DESi vs Industry Size")
 
+    CORE_CITIES = ["Mumbai", "Bengaluru", "Delhi", "Kolkata"]
+
     ind_g1 = ind_core[
         (ind_core["Platform"].isin(platforms))
-        & (ind_core["City Name"].isin(cities))
+        & (ind_core["City Name"].isin(CORE_CITIES))
         & (ind_core["Parent Category"].isin(categories))
     ]
 
     gmv_g1 = godesi[
         (godesi["Platform"].isin(platforms))
-        & (godesi["City Name"].isin(cities))
+        & (godesi["City Name"].isin(CORE_CITIES))
         & (godesi["Parent Category"].isin(categories))
     ]
 
@@ -1138,17 +1153,46 @@ with tab4:
 
     st.plotly_chart(fig1, use_container_width=True)
 
+    # ---- Calculate Totals ----
+    total_industry = comp["Industry_Size"].sum()
+    total_gmv = comp["GO_DESi_GMV"].sum()
+
+    total_share = (
+        (total_gmv / total_industry) * 100
+        if total_industry != 0
+        else 0
+    )
+
+    # ---- Prepare Monthly Table ----
     comp_disp = comp.copy()
+
     comp_disp["Industry_Size"] = comp_disp["Industry_Size"].apply(format_indian)
     comp_disp["GO_DESi_GMV"] = comp_disp["GO_DESi_GMV"].apply(format_indian)
     comp_disp["GO_DESi_Share_%"] = (
         comp["GO_DESi_GMV"] / comp["Industry_Size"].replace(0, np.nan) * 100
     ).apply(format_pct)
 
-    st.dataframe(
-        comp_disp[["MonthLabel", "Industry_Size", "GO_DESi_GMV", "GO_DESi_Share_%"]],
-        use_container_width=True
-    )
+    comp_disp = comp_disp[["MonthLabel", "Industry_Size", "GO_DESi_GMV", "GO_DESi_Share_%"]]
+
+    # ---- Add TOTAL Row ----
+    total_row = pd.DataFrame([{
+        "MonthLabel": "TOTAL",
+        "Industry_Size": format_indian(total_industry),
+        "GO_DESi_GMV": format_indian(total_gmv),
+        "GO_DESi_Share_%": format_pct(total_share)
+    }])
+
+    final_table = pd.concat([comp_disp, total_row], ignore_index=True)
+
+    # ---- Highlight TOTAL ----
+    def highlight_total(row):
+        if row["MonthLabel"] == "TOTAL":
+            return ["background-color:#1f2937; font-weight:700"] * len(row)
+        return [""] * len(row)
+
+    styled = final_table.style.apply(highlight_total, axis=1)
+
+    st.table(styled)
 
     # ========================================================
     # GRAPH 2 — INDUSTRY SIZE TREND (ALL CITIES)
@@ -1226,27 +1270,31 @@ with tab4:
     st.plotly_chart(fig3, use_container_width=True)
 
 # ------------------------------------------------------------
-# TAB 5 — P-TYPE DEEP DIVE (FY SAFE)
+# TAB 5 — P-TYPE DEEP DIVE (CLOUD SAFE)
 # ------------------------------------------------------------
+
 def render_ptype_section(
-    pt_df,
+    df,
     ptype,
     selected_platforms,
     selected_cities,
+    selected_fy,
     key_suffix=""
 ):
-    subset = pt_df.copy()
+
+    subset = df.copy()
 
     # ---------------------------
     # FILTERS
     # ---------------------------
+    subset = subset[subset["FinancialYear"] == selected_fy]
+    subset = subset[subset["P Type"] == ptype]
+
     if selected_platforms:
         subset = subset[subset["Platform"].isin(selected_platforms)]
 
     if selected_cities:
         subset = subset[subset["City"].isin(selected_cities)]
-
-    subset = subset[subset["P Type"] == ptype]
 
     if subset.empty:
         st.info(f"No data for {ptype} with current filters.")
@@ -1255,7 +1303,7 @@ def render_ptype_section(
     # ---------------------------
     # VARIANT FILTER
     # ---------------------------
-    variants = sorted(subset["Variant"].dropna().unique().tolist())
+    variants = sorted(subset["Variant"].dropna().unique())
     variant_key = f"variants_{ptype}_{key_suffix}"
 
     if variants:
@@ -1272,22 +1320,17 @@ def render_ptype_section(
         return
 
     # ---------------------------
-    # MONTH ORDER
-    # ---------------------------
-    subset = subset.copy()
-    subset["FYMonthOrder"] = subset["FYMonthOrder"].astype(int)
-
-    # ---------------------------
-    # AGGREGATION (INDUSTRY ONLY)
+    # MONTH AGGREGATION (LIGHT)
     # ---------------------------
     monthly = (
-        subset
-        .groupby(
+        subset.groupby(
             ["FYMonthOrder", "MonthLabel"],
-            as_index=False,
-            observed=False
-        )["Absolute_Size"]
-        .sum()
+            as_index=False
+        )
+        .agg(
+            Industry_Absolute=("Industry_Absolute", "sum"),
+            GODESI_Absolute=("GODESI_Absolute", "sum")
+        )
         .sort_values("FYMonthOrder")
     )
 
@@ -1295,56 +1338,96 @@ def render_ptype_section(
         st.info(f"No monthly data for {ptype}.")
         return
 
-    monthly["Industry_Cr"] = monthly["Absolute_Size"] / 1e7
+    # ---------------------------
+    # CALCULATIONS
+    # ---------------------------
+    monthly["Industry_Cr"] = monthly["Industry_Absolute"] / 1e7
+
+    monthly["Share_Pct"] = np.where(
+        monthly["Industry_Absolute"] > 0,
+        (monthly["GODESI_Absolute"] / monthly["Industry_Absolute"]) * 100,
+        np.nan
+    )
 
     # ---------------------------
     # PLOT
     # ---------------------------
-    fig = go.Figure()
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
 
     fig.add_trace(
         go.Scatter(
             x=monthly["MonthLabel"],
             y=monthly["Industry_Cr"],
-            mode="lines+markers+text",
             name="Industry Size (₹ Cr)",
-            text=[f"{v:.1f} Cr" for v in monthly["Industry_Cr"]],
-            textposition="top center"
-        )
+            mode="lines+markers"
+        ),
+        secondary_y=True
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=monthly["MonthLabel"],
+            y=monthly["Share_Pct"],
+            name="GO DESI Share (%)",
+            mode="lines+markers",
+            line=dict(dash="dot")
+        ),
+        secondary_y=False
     )
 
     fig.update_layout(
         margin=dict(l=20, r=20, t=40, b=20),
-        xaxis_title="Month",
-        yaxis_title="Industry Size (₹ Cr)",
         legend=dict(orientation="h", y=1.02, x=1, xanchor="right")
     )
 
+    fig.update_xaxes(title_text="Month")
+    fig.update_yaxes(title_text="GO DESI Share (%)", secondary_y=False)
+    fig.update_yaxes(title_text="Industry Size (₹ Cr)", secondary_y=True)
+
     st.plotly_chart(fig, use_container_width=True)
 
+# ------------------------------------------------------------
+# TAB 5 UI
+# ------------------------------------------------------------
 with tab5:
+
     st.title("P-Type Deep Dive — Industry vs GO DESi")
 
+    # --------------------------
+    # SIDEBAR FILTERS (TAB 5 ONLY)
+    # --------------------------
     with st.sidebar:
-        st.header("Deep Dive Filters")
+
+        st.markdown("### Tab 5 Filters")
+
+        fy_options = sorted(tab5_df["FinancialYear"].unique())
+
+        selected_fy = st.selectbox(
+            "Financial Year (Tab 5)",
+            options=fy_options,
+            index=len(fy_options) - 1,
+            key="tab5_fy"
+        )
 
         platforms_tab5 = st.multiselect(
             "Platform (Tab 5)",
-            sorted(pt_df["Platform"].dropna().unique().tolist()),
+            sorted(tab5_df["Platform"].dropna().unique()),
             default=[],
-            key="platform_tab5"
+            key="tab5_platform"
         )
 
         cities_tab5 = st.multiselect(
             "City (Tab 5)",
-            sorted(pt_df["City"].dropna().unique().tolist()),
+            sorted(tab5_df["City"].dropna().unique()),
             default=[],
-            key="city_tab5"
+            key="tab5_city"
         )
 
     sweets_tab, candy_tab = st.tabs(["Indian Sweets", "Candies & Gum"])
 
+    # ---------- Indian Sweets ----------
     with sweets_tab:
+
         st.subheader("Indian Sweets — P Type Trends")
 
         sweets_ptypes = [
@@ -1355,15 +1438,18 @@ with tab5:
         for ptype in sweets_ptypes:
             st.markdown(f"### {ptype}")
             render_ptype_section(
-                pt_df,
+                tab5_df,
                 ptype,
                 platforms_tab5,
                 cities_tab5,
+                selected_fy,
                 key_suffix="sweets"
             )
             st.markdown("---")
 
+    # ---------- Candies & Gum ----------
     with candy_tab:
+
         st.subheader("Candies & Gum — P Type Trends")
 
         candy_ptypes = ["Candy", "Gum", "Mint"]
@@ -1371,10 +1457,11 @@ with tab5:
         for ptype in candy_ptypes:
             st.markdown(f"### {ptype}")
             render_ptype_section(
-                pt_df,
+                tab5_df,
                 ptype,
                 platforms_tab5,
                 cities_tab5,
+                selected_fy,
                 key_suffix="candy"
             )
             st.markdown("---")
