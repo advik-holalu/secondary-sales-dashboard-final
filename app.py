@@ -1232,9 +1232,18 @@ with tab4:
     st.plotly_chart(fig2, use_container_width=True)
 
     # ========================================================
-    # GRAPH 3 — GO DESi GMV TREND (CORE CITIES)
+    # GRAPH 3 — GO DESi TREND (CORE CITIES)
     # ========================================================
-    st.subheader("GO DESi GMV Trend — Core Cities")
+    metric_tab4 = st.radio(
+        "Metric",
+        ["GMV", "Revenue"],
+        horizontal=True,
+        key="tab4_metric_toggle"
+    )
+
+    value_col = "GO_DESi_GMV" if metric_tab4 == "GMV" else "GO_DESi_Revenue"
+
+    st.subheader(f"GO DESi {metric_tab4} Trend — Core Cities")
 
     gmv_trend = (
         godesi[
@@ -1242,26 +1251,36 @@ with tab4:
             & (godesi["City Name"].isin(cities))
             & (godesi["Parent Category"].isin(categories))
         ]
-        .groupby(["FYMonthOrder", "MonthLabel", "City Name"], as_index=False, observed=False)["GO_DESi_GMV"]
+        .groupby(
+            ["FYMonthOrder", "MonthLabel", "City Name"],
+            as_index=False,
+            observed=False
+        )[value_col]
         .sum()
         .sort_values("FYMonthOrder")
     )
 
-    month_order = gmv_trend.drop_duplicates("FYMonthOrder").sort_values("FYMonthOrder")["MonthLabel"].tolist()
+    month_order = (
+        gmv_trend
+        .drop_duplicates("FYMonthOrder")
+        .sort_values("FYMonthOrder")["MonthLabel"]
+        .tolist()
+    )
 
     fig3 = px.line(
         gmv_trend,
         x="MonthLabel",
-        y="GO_DESi_GMV",
+        y=value_col,
         color="City Name",
         markers=True,
-        text=gmv_trend["GO_DESi_GMV"].apply(format_indian),
+        text=gmv_trend[value_col].apply(format_indian),
         category_orders={"MonthLabel": month_order}
     )
 
     fig3.update_traces(textposition="top center")
 
-    y_max = gmv_trend["GO_DESi_GMV"].max()
+    y_max = gmv_trend[value_col].max()
+
     fig3.update_yaxes(
         tickvals=np.linspace(0, y_max, 6),
         ticktext=[format_indian(v, 0) for v in np.linspace(0, y_max, 6)]
