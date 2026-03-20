@@ -1187,7 +1187,7 @@ with tab4:
     # ---- Highlight TOTAL ----
     def highlight_total(row):
         if row["MonthLabel"] == "TOTAL":
-            return ["background-color:#1f2937; font-weight:700"] * len(row)
+            return ["background-color:#fde6d2; font-weight:700"] * len(row)
         return [""] * len(row)
 
     styled = final_table.style.apply(highlight_total, axis=1)
