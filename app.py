@@ -501,11 +501,11 @@ with tab1:
 
         st.markdown(f"### {fy_quarter}")
 
-        # 🔥 Re-aggregate to SKU level (remove state/region/platform grain)
+        # Aggregate using L3 (backend logic)
         dfq = (
             dfq
             .groupby(
-                ["Item Name", "Parent Category", "L1 Category"],
+                ["L3 Category", "Parent Category", "L1 Category"],
                 as_index=False
             )[metric]
             .sum()
@@ -518,17 +518,20 @@ with tab1:
             .reset_index(drop=True)
         )
 
+        # 👇 Rename for UI ONLY
+        dfq = dfq.rename(columns={"L3 Category": "Normalised Item Name"})
+
         dfq[f"{metric} (₹)"] = dfq[metric].apply(format_indian)
 
         st.dataframe(
             dfq[
                 [
-                    "Item Name",
+                    "Normalised Item Name",
                     "Parent Category",
                     "L1 Category",
                     f"{metric} (₹)",
                 ]
-            ].reset_index(drop=True),
+            ],
             use_container_width=True
         )
 
