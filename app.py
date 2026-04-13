@@ -1622,6 +1622,74 @@ with tab6:
 
         """)
 
+    with st.expander("Industry View", expanded=False):
+        st.markdown("""
+        ### Purpose
+        Compares overall industry size with GO DESi performance across regions over time.
+
+        ---
+
+        ### Filters
+
+        **Metric**
+        Select comparison basis:
+        - GMV (Gross Merchandise Value)
+        - SP (Selling Price)
+
+        **Platform**
+        Filters data by platform/platforms.
+
+        **Region**
+        Filters data by selected city buckets.
+
+        **Category**
+        Filters data by parent category/categories.
+
+        ---
+
+        ### GO DESi Market Share Trend (%)
+
+        **Description**
+        - Month-wise market share trend for GO DESi  
+        - Each line represents a region  
+        - Market Share = GO DESi Sales / Industry Size  
+
+        ---
+
+        ### Industry Size vs GO DESi
+
+        **Description**
+        - Clustered bar chart comparing:
+            - Total Industry Size  
+            - GO DESi Sales  
+        - Helps understand absolute scale difference  
+
+        ---
+
+        ### Industry Size Trend
+
+        **Description**
+        - Multi-line monthly trend of industry size  
+        - Each line represents a region  
+        - Shows market expansion or contraction  
+
+        ---
+
+        ### GO DESi Sales Trend
+
+        **Description**
+        - Multi-line monthly trend of GO DESi sales  
+        - Each line represents a region  
+        - Shows performance movement across regions  
+
+        ---
+
+        ### How to Use
+        - Compare share vs absolute growth  
+        - Identify regions with strong penetration  
+        - Spot markets where industry is growing but share is flat  
+
+        """)
 
 
     with st.expander("Product Type Deep Dive", expanded=False):
