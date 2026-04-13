@@ -4,7 +4,6 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from city_mapping import CITY_TO_BUCKET
 
 # ------------------------------------------------------------
 # PAGE CONFIG
@@ -100,18 +99,12 @@ def load_tab3_totals():
 
 tab3_total_df = load_tab3_totals()
 
-#TAB 4 LOADS — METRO INDUSTRY VIEW
+# TAB 4 LOADS — INDSUTRY VIEW
 @st.cache_data
-def load_tab4_industry_universe():
-    return pd.read_parquet("data_agg/tab4_industry_size_universe.parquet")
+def load_tab4_data():
+    return pd.read_parquet("data_agg/tab4_trend.parquet")
 
-@st.cache_data
-def load_tab4_godesi_gmv():
-    return pd.read_parquet("data_agg/tab4_godesi_gmv_core_cities.parquet")
-
-tab4_industry_core = load_tab4_industry_universe()
-tab4_industry_universe = load_tab4_industry_universe()
-tab4_godesi_gmv = load_tab4_godesi_gmv()
+tab4_df = load_tab4_data()
 
 # TAB 5 LOADS — PRODUCT TYPE DEEP DIVE
 @st.cache_data
@@ -153,9 +146,6 @@ ALL_FY = _get_all_financial_years(
     tab2_df,
     tab3_month_df,
     tab3_total_df,
-    tab4_industry_core,
-    tab4_industry_universe,
-    tab4_godesi_gmv,
     pt_df,
     tab5_month_df,
     tab5_variant_df,
@@ -263,8 +253,6 @@ def apply_line_label_style(fig, text_size=13):
 
     return fig
 
-
-
 # ============================================================
 # DEFINE DASHBOARD TABS
 # ============================================================
@@ -272,7 +260,7 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "Sales Overview",
     "Top Markets",
     "Growth vs Laggards",
-    "Metro Industry View",
+    "Industry View",
     "Product Type Deep Dive",
     "User Guide"
 ])
@@ -1048,319 +1036,206 @@ with tab3:
 
             st.plotly_chart(fig, use_container_width=True)
 
-
 # ============================================================
-# TAB 4 — METRO INDUSTRY VIEW (FY SAFE)
+# TAB 4 — INDUSTRY VIEW (FINAL FINAL WITH DEFAULTS)
 # ============================================================
 with tab4:
-    st.title("Metro Industry View")
 
-    # --------------------------------------------------------
-    # SIDEBAR FILTERS (TAB 4)
-    # --------------------------------------------------------
+    st.title("Industry View")
+
+    # ----------------------------
+    # SIDEBAR FILTERS (SMART DEFAULTS)
+    # ----------------------------
     with st.sidebar:
-        st.header("Metro Industry Filters")
+        st.header("Industry Filters")
 
-        platform_tab4 = st.multiselect(
-            "Platform (Tab 4)",
-            sorted(tab4_industry_core["Platform"].dropna().unique()),
-            default=[]
+        metric_tab4 = st.radio(
+            "Metric",
+            ["GMV", "SP"],
+            index=0,
+            key="tab4_metric"
         )
 
-        city_tab4 = st.multiselect(
-            "City (Tab 4 – Core)",
-            sorted(tab4_industry_core["City Name"].dropna().unique()),
-            default=[]
-        )
+        platform_options = sorted(tab4_df["Platform"].dropna().unique())
+        city_options = sorted(tab4_df["City Name"].dropna().unique())
+        category_options = sorted(tab4_df["Parent Category"].dropna().unique())
 
-        category_tab4 = st.multiselect(
-            "Category (Tab 4)",
-            sorted(tab4_industry_core["Parent Category"].dropna().unique()),
-            default=[]
-        )
+        # ✅ DEFAULTS
+        default_platform = ["Blinkit"] if "Blinkit" in platform_options else []
+        default_cities = [c for c in ["PAN India", "Bengaluru-Metro", "Mumbai-Metro"] if c in city_options]
+        default_category = ["Indian Sweets"] if "Indian Sweets" in category_options else []
 
-    # --------------------------------------------------------
-    # SAFE DEFAULTS
-    # --------------------------------------------------------
-    platforms = platform_tab4 or tab4_industry_core["Platform"].dropna().unique().tolist()
-    cities = city_tab4 or tab4_industry_core["City Name"].dropna().unique().tolist()
-    if "PAN India" in cities:
-        cities = tab4_industry_core["City Name"].dropna().unique().tolist()
-    categories = category_tab4 or tab4_industry_core["Parent Category"].dropna().unique().tolist()
+        platform_sel = st.multiselect("Platform", platform_options, default=default_platform)
+        city_sel = st.multiselect("Region", city_options, default=default_cities)
+        category_sel = st.multiselect("Parent Category", category_options, default=default_category)
 
-    # --------------------------------------------------------
-    # FY FILTER
-    # --------------------------------------------------------
-    ind_core = filter_by_fy(tab4_industry_universe, selected_fy)
-    ind_univ = filter_by_fy(tab4_industry_universe, selected_fy)
-    godesi = filter_by_fy(tab4_godesi_gmv, selected_fy)
+    # ----------------------------
+    # APPLY FILTERS (EMPTY = ALL)
+    # ----------------------------
+    df4 = tab4_df.copy()
+    df4 = filter_by_fy(df4, selected_fy)
 
-    # ========================================================
-    # GRAPH 1 — GO DESi vs INDUSTRY SIZE
-    # ========================================================
-    st.subheader("GO DESi vs Industry Size")
+    if platform_sel:
+        df4 = df4[df4["Platform"].isin(platform_sel)]
 
-    # ---- METRIC TOGGLE (keep here for now) ----
-    metric_tab4 = st.radio(
-        "Metric",
-        ["GMV", "SP"],
-        horizontal=True,
-        key="tab4_metric_toggle_main"
-    )
+    if city_sel:
+        df4 = df4[df4["City Name"].isin(city_sel)]
 
-    industry_col = "Industry_Size_GMV" if metric_tab4 == "GMV" else "Industry_Size_SP"
-    godesi_col = "GO_DESi_GMV" if metric_tab4 == "GMV" else "GO_DESi_Revenue"
+    if category_sel:
+        df4 = df4[df4["Parent Category"].isin(category_sel)]
 
-    # ---- MAP GO DESi CITY → BUCKET ----
-    godesi["City Bucket"] = godesi["City Name"].map(CITY_TO_BUCKET)
+    if df4.empty:
+        st.warning("No data for selected filters.")
+        st.stop()
 
-    # ---- FILTERS (FULLY RESPONSIVE) ----
-    ind_g1 = ind_core[
-        (ind_core["Platform"].isin(platforms))
-        & (ind_core["City Name"].isin(cities))
-        & (ind_core["Parent Category"].isin(categories))
-    ]
+    month_order = get_month_order(df4)
 
-    gmv_g1 = godesi[
-        (godesi["Platform"].isin(platforms))
-        & (godesi["City Bucket"].isin(cities))
-        & (godesi["Parent Category"].isin(categories))
-    ]
+    # ----------------------------
+    # METRIC SWITCH
+    # ----------------------------
+    if metric_tab4 == "GMV":
+        industry_col = "Industry_Size_GMV"
+        godesi_col = "GO_DESI_GMV"
+        share_col = "Market_Share_GMV"
+    else:
+        industry_col = "Industry_Size_SP"
+        godesi_col = "GO_DESI_SP"
+        share_col = "Market_Share_SP"
 
-    # ---- MONTHLY AGG ----
-    ind_m = (
-        ind_g1
-        .groupby(["FYMonthOrder", "MonthLabel"], as_index=False, observed=False)[industry_col]
+    # ============================================================
+    # GRAPH 1 — MARKET SHARE (MULTI LINE)
+    # ============================================================
+    st.subheader("GO DESi Market Share Trend (%)")
+
+    share_df = (
+        df4
+        .groupby(["FYMonthOrder", "MonthLabel", "City Name"], as_index=False)
+        [[godesi_col, industry_col]]
         .sum()
         .sort_values("FYMonthOrder")
     )
 
-    gmv_m = (
-        gmv_g1
-        .groupby(["FYMonthOrder", "MonthLabel"], as_index=False, observed=False)[godesi_col]
-        .sum()
-        .sort_values("FYMonthOrder")
+    share_df[share_col] = np.where(
+        share_df[industry_col] > 0,
+        (share_df[godesi_col] / share_df[industry_col]) * 100,
+        0
     )
 
-    # ---- MERGE ----
-    comp = ind_m.merge(gmv_m, on=["FYMonthOrder", "MonthLabel"], how="left")
-    comp[godesi_col] = comp[godesi_col].fillna(0)
+    share_df = enforce_month_order(share_df, month_order)
 
-    month_order = comp.sort_values("FYMonthOrder")["MonthLabel"].tolist()
-
-    # ---- BAR CHART ----
-    fig1 = px.bar(
-        comp,
+    fig = px.line(
+        share_df,
         x="MonthLabel",
-        y=[industry_col, godesi_col],
-        barmode="group",
+        y=share_col,
+        color="City Name",
+        markers=True,
+        text=share_df[share_col].apply(format_pct),
         category_orders={"MonthLabel": month_order}
     )
 
-    for trace in fig1.data:
-        trace.text = [format_indian(v) for v in trace.y]
-        trace.textposition = "outside"
-        trace.hoverinfo = "skip"
+    fig.update_traces(textposition="top center")
+    st.plotly_chart(fig, use_container_width=True)
 
-    y_max = max(comp[industry_col].max(), comp[godesi_col].max())
+    # ============================================================
+    # GRAPH 2 — BAR (SUMMARY)
+    # ============================================================
+    st.subheader("Industry Size vs GO DESi")
 
-    fig1.update_yaxes(
+    bar_df = (
+        df4
+        .groupby(["FYMonthOrder", "MonthLabel"], as_index=False)
+        [[industry_col, godesi_col]]
+        .sum()
+        .sort_values("FYMonthOrder")
+    )
+
+    bar_df = enforce_month_order(bar_df, month_order)
+
+    bar_df_melt = bar_df.melt(
+        id_vars=["MonthLabel"],
+        value_vars=[industry_col, godesi_col],
+        var_name="Type",
+        value_name="Value"
+    )
+
+    bar_df_melt["Type"] = bar_df_melt["Type"].map({
+        industry_col: "Industry Size",
+        godesi_col: "GO DESi"
+    })
+
+    fig = px.bar(
+        bar_df_melt,
+        x="MonthLabel",
+        y="Value",
+        color="Type",
+        barmode="group",
+        text=bar_df_melt["Value"].apply(format_indian),
+        category_orders={"MonthLabel": month_order}
+    )
+
+    fig.update_traces(textposition="outside")
+
+    y_max = bar_df_melt["Value"].max()
+    fig.update_yaxes(
         tickvals=np.linspace(0, y_max, 6),
         ticktext=[format_indian(v, 0) for v in np.linspace(0, y_max, 6)]
     )
 
-    st.plotly_chart(fig1, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True)
 
-    # ========================================================
-    # TABLE — NO HIGHLIGHT, FILTER RESPONSIVE
-    # ========================================================
+    # ============================================================
+    # GRAPH 3 — INDUSTRY TREND (MULTI LINE)
+    # ============================================================
+    st.subheader("Industry Size Trend")
 
-    # ---- TOTALS ----
-    total_industry = comp[industry_col].sum()
-    total_gmv = comp[godesi_col].sum()
-
-    total_share = (
-        (total_gmv / total_industry) * 100
-        if total_industry != 0
-        else 0
-    )
-
-    # ---- FORMAT TABLE ----
-    comp_disp = comp.copy()
-
-    comp_disp[industry_col] = comp_disp[industry_col].apply(format_indian)
-    comp_disp[godesi_col] = comp_disp[godesi_col].apply(format_indian)
-
-    comp_disp["GO_DESi_Share_%"] = (
-        comp[godesi_col] / comp[industry_col].replace(0, np.nan) * 100
-    ).apply(format_pct)
-
-    comp_disp = comp_disp[["MonthLabel", industry_col, godesi_col, "GO_DESi_Share_%"]]
-
-    # ---- TOTAL ROW ----
-    total_row = pd.DataFrame([{
-        "MonthLabel": "TOTAL",
-        industry_col: format_indian(total_industry),
-        godesi_col: format_indian(total_gmv),
-        "GO_DESi_Share_%": format_pct(total_share)
-    }])
-
-    final_table = pd.concat([comp_disp, total_row], ignore_index=True)
-
-    st.table(final_table)
-
-    # ========================================================
-    # GRAPH 2 — INDUSTRY SIZE TREND
-    # ========================================================
-    st.subheader(f"Industry Size Trend — {metric_tab4}")
-
-    # ---- FILTER (NOW CITY RESPONSIVE) ----
-    trend = (
-        ind_univ[
-            (ind_univ["Platform"].isin(platforms))
-            & (ind_univ["Parent Category"].isin(categories))
-            & (ind_univ["City Name"].isin(cities))
-        ]
-        .groupby(
-            ["FYMonthOrder", "MonthLabel", "City Name"],
-            as_index=False,
-            observed=False
-        )[industry_col]
+    ind_df = (
+        df4
+        .groupby(["FYMonthOrder", "MonthLabel", "City Name"], as_index=False)[industry_col]
         .sum()
         .sort_values("FYMonthOrder")
     )
 
-    month_order = (
-        trend
-        .drop_duplicates("FYMonthOrder")
-        .sort_values("FYMonthOrder")["MonthLabel"]
-        .tolist()
-    )
+    ind_df = enforce_month_order(ind_df, month_order)
 
-    # ---- LINE CHART ----
-    fig2 = px.line(
-        trend,
+    fig = px.line(
+        ind_df,
         x="MonthLabel",
         y=industry_col,
         color="City Name",
         markers=True,
-        text=trend[industry_col].apply(format_indian),
+        text=ind_df[industry_col].apply(format_indian),
         category_orders={"MonthLabel": month_order}
     )
 
-    fig2.update_traces(textposition="top center")
+    fig.update_traces(textposition="top center")
+    st.plotly_chart(fig, use_container_width=True)
 
-    y_max = trend[industry_col].max()
+    # ============================================================
+    # GRAPH 4 — GO DESi TREND (MULTI LINE)
+    # ============================================================
+    st.subheader("GO DESi Sales Trend")
 
-    fig2.update_yaxes(
-        tickvals=np.linspace(0, y_max, 6),
-        ticktext=[format_indian(v, 0) for v in np.linspace(0, y_max, 6)]
-    )
-
-    st.plotly_chart(fig2, use_container_width=True)
-
-    # ========================================================
-    # GRAPH 3 — GO DESi TREND
-    # ========================================================
-    st.subheader(f"GO DESi {metric_tab4} Trend")
-
-    # ---- USE BUCKET (NOT CITY NAME) ----
-    gmv_trend = (
-        godesi[
-            (godesi["Platform"].isin(platforms))
-            & (godesi["City Bucket"].isin(cities))
-            & (godesi["Parent Category"].isin(categories))
-        ]
-        .groupby(
-            ["FYMonthOrder", "MonthLabel", "City Bucket"],
-            as_index=False,
-            observed=False
-        )[godesi_col]
+    gd_df = (
+        df4
+        .groupby(["FYMonthOrder", "MonthLabel", "City Name"], as_index=False)[godesi_col]
         .sum()
         .sort_values("FYMonthOrder")
     )
 
-    month_order = (
-        gmv_trend
-        .drop_duplicates("FYMonthOrder")
-        .sort_values("FYMonthOrder")["MonthLabel"]
-        .tolist()
-    )
+    gd_df = enforce_month_order(gd_df, month_order)
 
-    # ---- LINE CHART ----
-    fig3 = px.line(
-        gmv_trend,
+    fig = px.line(
+        gd_df,
         x="MonthLabel",
         y=godesi_col,
-        color="City Bucket",
-        markers=True,
-        text=gmv_trend[godesi_col].apply(format_indian),
-        category_orders={"MonthLabel": month_order}
-    )
-
-    fig3.update_traces(textposition="top center")
-
-    y_max = gmv_trend[godesi_col].max()
-
-    fig3.update_yaxes(
-        tickvals=np.linspace(0, y_max, 6),
-        ticktext=[format_indian(v, 0) for v in np.linspace(0, y_max, 6)]
-    )
-
-    st.plotly_chart(fig3, use_container_width=True)
-
-    # ========================================================
-    # GRAPH 4 — MARKET SHARE TREND BY CITY
-    # ========================================================
-    st.subheader("GO DESi Market Share Trend (%) — by City")
-
-    # ---- INDUSTRY BY CITY ----
-    ind_share = (
-        ind_g1
-        .groupby(["FYMonthOrder", "MonthLabel", "City Name"], as_index=False, observed=False)[industry_col]
-        .sum()
-    )
-
-    # ---- GODESI BY CITY (USING BUCKET) ----
-    godesi_share = (
-        gmv_g1
-        .groupby(["FYMonthOrder", "MonthLabel", "City Bucket"], as_index=False, observed=False)[godesi_col]
-        .sum()
-        .rename(columns={"City Bucket": "City Name"})
-    )
-
-    # ---- MERGE ----
-    share_df = ind_share.merge(
-        godesi_share,
-        on=["FYMonthOrder", "MonthLabel", "City Name"],
-        how="left"
-    )
-
-    share_df[godesi_col] = share_df[godesi_col].fillna(0)
-
-    # ---- SHARE ----
-    share_df["Market_Share_%"] = (
-        share_df[godesi_col] / share_df[industry_col].replace(0, np.nan) * 100
-    ).fillna(0)
-
-    share_df = share_df.sort_values("FYMonthOrder")
-
-    month_order = share_df["MonthLabel"].drop_duplicates().tolist()
-
-    # ---- LINE CHART ----
-    fig4 = px.line(
-        share_df,
-        x="MonthLabel",
-        y="Market_Share_%",
         color="City Name",
         markers=True,
-        text=share_df["Market_Share_%"].apply(lambda x: f"{x:.2f}%"),
+        text=gd_df[godesi_col].apply(format_indian),
         category_orders={"MonthLabel": month_order}
     )
 
-    fig4.update_traces(textposition="top center")
-
-    st.plotly_chart(fig4, use_container_width=True)
+    fig.update_traces(textposition="top center")
+    st.plotly_chart(fig, use_container_width=True)
 
 # ------------------------------------------------------------
 # TAB 5 — P-TYPE DEEP DIVE (CLOUD SAFE)
@@ -1747,64 +1622,7 @@ with tab6:
 
         """)
 
-    with st.expander("Metro Industry View", expanded=False):
-        st.markdown("""
-        ### Purpose
-        Provides a city-level comparison of GO DESi performance against overall industry size across key metro markets.
 
-        ---
-
-        ### Filters
-
-        **Platform**  
-        Filters data by platform/platforms.
-
-        **City (Core)**  
-        Filters data to selected core metro cities.
-
-        **Category**  
-        Filters data by primary product category/categories.
-
-        ---
-
-        ### GO DESi vs Industry Size
-
-        **Description**
-        - Monthly bar chart comparing:
-        - Total industry size
-        - GO DESi GMV
-        - Values shown at city aggregation level
-        - Used to assess scale gap and penetration opportunity
-
-        ---
-
-        ### Industry Size Trend — All Cities
-
-        **Description**
-        - Month-wise industry size trend across all tracked cities
-        - Separate line per city
-        - Used to understand overall market expansion or contraction
-
-        ---
-
-        ### GO DESi GMV Trend — Core Cities
-
-        **Description**
-        - Month-wise GO DESi GMV trend for selected core cities
-        - Separate line per city
-        - Used to track brand performance within key metros
-
-        ---
-
-        ### Tabular View
-
-        **Table Columns**
-        - Month: Calendar month
-        - Industry Size: Total market size for the city
-        - GO DESi GMV: GO DESi sales value
-        - GO DESi Share %: Percentage share of GO DESi within industry size
-
-        """)
 
     with st.expander("Product Type Deep Dive", expanded=False):
         st.markdown("""
