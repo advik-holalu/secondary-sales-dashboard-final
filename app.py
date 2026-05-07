@@ -155,24 +155,35 @@ if not ALL_FY:
     st.error("No FinancialYear values found in loaded parquet files.")
     st.stop()
 
-# Single global FY selector (used by all tabs)
+# ------------------------------------------------------------
+# GLOBAL FY FILTER (MAX 2)
+# ------------------------------------------------------------
 with st.sidebar:
-    selected_fy = st.selectbox(
+    selected_fys = st.multiselect(
         "Financial Year",
         options=ALL_FY,
-        index=len(ALL_FY) - 1,  # default = latest FY
+        default=[ALL_FY[-1]],
         key="global_financial_year",
     )
+
+    # ---- POPUP STYLE (ONLY WHEN WRONG) ----
+    if len(selected_fys) > 2:
+        st.toast("Select maximum 2 Financial Years", icon="⚠️")
+        st.stop()
+
+    if not selected_fys:
+        st.toast("Select at least 1 Financial Year", icon="⚠️")
+        st.stop()
 
 # ------------------------------------------------------------
 # FY-SAFE HELPERS (USE EVERYWHERE)
 # ------------------------------------------------------------
-def filter_by_fy(dfin: pd.DataFrame, fy: str) -> pd.DataFrame:
+def filter_by_fy(dfin: pd.DataFrame, fys: list) -> pd.DataFrame:
     if dfin is None or dfin.empty:
         return dfin
     if "FinancialYear" not in dfin.columns:
         return dfin
-    return dfin[dfin["FinancialYear"].astype(str) == str(fy)].copy()
+    return dfin[dfin["FinancialYear"].isin(fys)].copy()
 
 def get_month_order(dfin: pd.DataFrame):
     """
@@ -204,6 +215,26 @@ def enforce_month_order(dfin: pd.DataFrame, month_order: list):
         categories=month_order,
         ordered=True
     )
+    return out
+
+def add_fy_month_axis(dfin: pd.DataFrame) -> pd.DataFrame:
+    if dfin is None or dfin.empty:
+        return dfin
+
+    out = dfin.copy()
+
+    out["FYMonthKey"] = (
+        out["FinancialYear"].astype(str)
+        + "_"
+        + out["FYMonthOrder"].astype(int).astype(str).str.zfill(2)
+    )
+
+    out["FYMonthLabel"] = (
+        out["MonthLabel"].astype(str)
+        + " "
+        + out["FinancialYear"].astype(str)
+    )
+
     return out
 
 # ------------------------------------------------------------
@@ -253,6 +284,43 @@ def apply_line_label_style(fig, text_size=13):
 
     return fig
 
+# ------------------------------------------------------------
+# GLOBAL FY DIVIDER (APPLIES TO ALL CHARTS)
+# ------------------------------------------------------------
+def add_fy_divider(fig, df, selected_fys):
+    if len(selected_fys) != 2:
+        return fig
+
+    if "FYMonthKey" not in df.columns or "FinancialYear" not in df.columns:
+        return fig
+
+    second_fy = sorted(selected_fys)[1]
+
+    x_order = df["FYMonthKey"].drop_duplicates().tolist()
+
+    second_fy_points = df[df["FinancialYear"] == second_fy]["FYMonthKey"]
+
+    if second_fy_points.empty:
+        return fig
+
+    first_point_second_fy = second_fy_points.iloc[0]
+
+    if first_point_second_fy not in x_order:
+        return fig
+
+    idx = x_order.index(first_point_second_fy)
+    divider_x = idx - 0.5
+
+    fig.add_vline(
+        x=divider_x,
+        line_width=0.6,
+        line_dash="dash",
+        line_color="white",
+        opacity=0.5
+    )
+
+    return fig
+
 # ============================================================
 # DEFINE DASHBOARD TABS
 # ============================================================
@@ -266,12 +334,12 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 ])
 
 # ============================================================
-# TAB 1 — SALES OVERVIEW (FY SAFE)
+# TAB 1 — SALES OVERVIEW (FY SAFE + MULTI FY FIXED)
 # ============================================================
 with tab1:
 
     # ------------------------------------------------------------
-    # SIDEBAR FILTERS (TAB 1)
+    # SIDEBAR FILTERS
     # ------------------------------------------------------------
     with st.sidebar:
         st.header("Sales Overview Filters")
@@ -330,7 +398,7 @@ with tab1:
         )
 
     # ------------------------------------------------------------
-    # SHARED FILTER HELPER
+    # FILTER FUNCTION
     # ------------------------------------------------------------
     def apply_tab1_filters(dfin):
         out = dfin.copy()
@@ -353,10 +421,10 @@ with tab1:
         return out
 
     # ------------------------------------------------------------
-    # APPLY FILTERS + FY FILTER
+    # APPLY FILTERS
     # ------------------------------------------------------------
     df_filt = apply_tab1_filters(df)
-    df_filt = filter_by_fy(df_filt, selected_fy)
+    df_filt = df_filt[df_filt["FinancialYear"].isin(selected_fys)]
 
     if df_filt.empty:
         st.warning("No data for selected filters.")
@@ -365,7 +433,7 @@ with tab1:
     month_order = get_month_order(df_filt)
 
     # ============================================================
-    # SECTION 1 — CATEGORY TREND (PARENT CATEGORY)
+    # 1. CATEGORY TREND
     # ============================================================
     st.title("Secondary Sales Overview")
     st.subheader("Parent Category-wise Trend")
@@ -374,23 +442,28 @@ with tab1:
         df_filt
         .groupby(
             ["FinancialYear", "FYMonthOrder", "MonthLabel", "Parent Category"],
-            as_index=False,
-            observed=False
+            as_index=False
         )[metric]
         .sum()
-        .sort_values("FYMonthOrder")
     )
 
     timeline = enforce_month_order(timeline, month_order)
+    timeline = add_fy_month_axis(timeline)
+    timeline = timeline.sort_values("FYMonthKey")
 
     fig = px.line(
         timeline,
-        x="MonthLabel",
+        x="FYMonthKey",
         y=metric,
         color="Parent Category",
         markers=True,
-        text=timeline[metric].apply(format_indian),
-        category_orders={"MonthLabel": month_order}
+        text=timeline[metric].apply(format_indian)
+    )
+
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=timeline["FYMonthKey"],
+        ticktext=timeline["MonthLabel"]
     )
 
     y_max = timeline[metric].max()
@@ -398,174 +471,292 @@ with tab1:
 
     fig.update_yaxes(
         tickvals=y_ticks,
-        ticktext=[format_indian(v, decimals=0) for v in y_ticks]
+        ticktext=[format_indian(v, 0) for v in y_ticks]
     )
+
+    fig = add_fy_divider(fig, timeline, selected_fys)
 
     st.plotly_chart(fig, use_container_width=True)
 
     # ============================================================
-    # SECTION 2 — DONUTS (FY QUARTERS)
+    # 1B. YoY COMPARISON (MONTH-WISE)
     # ============================================================
-    st.subheader("Sales Distribution — Q1, Q2, Q3")
+    st.subheader("YoY Comparison — Month-wise")
 
-    donut_base = apply_tab1_filters(donut_df)
-    donut_base = filter_by_fy(donut_base, selected_fy)
+    # ----------------------------
+    # Month selector
+    # ----------------------------
+    month_options = (
+        timeline[["FYMonthOrder", "MonthLabel"]]
+        .drop_duplicates()
+        .sort_values("FYMonthOrder")
+    )
 
-    def donut_pair(fy_quarter):
-        dfq = donut_base[donut_base["FYQuarter"] == fy_quarter]
+    selected_month = st.selectbox(
+        "Select Month",
+        options=month_options["MonthLabel"].tolist(),
+        index=0,
+        key="yoy_month_selector"
+    )
 
-        if dfq.empty:
-            return
+    # ----------------------------
+    # Filter ONLY that month
+    # ----------------------------
+    yoy_df = timeline[timeline["MonthLabel"] == selected_month]
 
-        # Quarter heading
-        st.markdown(
-            f"### {fy_quarter}",
-            unsafe_allow_html=True
+    if yoy_df.empty:
+        st.info("No data available for selected month.")
+    else:
+
+        # ----------------------------
+        # Aggregate FY-wise
+        # ----------------------------
+        yoy_df = (
+            yoy_df
+            .groupby(["FinancialYear", "Parent Category"], as_index=False)[metric]
+            .sum()
         )
 
-        c1, c2 = st.columns(2)
+        # ----------------------------
+        # Plot
+        # ----------------------------
+        fig = px.line(
+            yoy_df,
+            x="FinancialYear",
+            y=metric,
+            color="Parent Category",
+            markers=True,
+            text=yoy_df[metric].apply(format_indian)
+        )
 
-        with c1:
-            reg = dfq.groupby("Region Name", as_index=False, observed=False)[metric].sum()
-            fig = px.pie(
+        fig.update_traces(textposition="top center")
+
+        # ----------------------------
+        # Y-axis formatting
+        # ----------------------------
+        y_max = yoy_df[metric].max()
+        y_ticks = np.linspace(0, y_max, 6)
+
+        fig.update_yaxes(
+            tickvals=y_ticks,
+            ticktext=[format_indian(v, 0) for v in y_ticks]
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ============================================================
+    # 2. DONUTS (FINAL — MULTI FY + PARTIAL QUARTER SAFE)
+    # ============================================================
+    st.subheader("Sales Distribution — Quarter-wise")
+
+    # ------------------------
+    # Apply filters
+    # ------------------------
+    donut_base = apply_tab1_filters(donut_df)
+    donut_base = donut_base[donut_base["FinancialYear"].isin(selected_fys)]
+
+    # ------------------------
+    # ALWAYS derive quarters from FULL data (not filtered)
+    # ------------------------
+    fy_quarter_pairs = (
+        donut_df[donut_df["FinancialYear"].isin(selected_fys)]
+        [["FinancialYear", "FYQuarter"]]
+        .dropna()
+        .drop_duplicates()
+    )
+
+    # correct ordering
+    order_map = {"Q1":1, "Q2":2, "Q3":3, "Q4":4}
+    fy_quarter_pairs["sort"] = fy_quarter_pairs["FYQuarter"].map(order_map)
+
+    fy_quarter_pairs = fy_quarter_pairs.sort_values(
+        ["FinancialYear", "sort"]
+    )
+
+    # ------------------------
+    # Render donuts
+    # ------------------------
+    for _, row in fy_quarter_pairs.iterrows():
+
+        fy = row["FinancialYear"]
+        q = row["FYQuarter"]
+
+        # try filtered data first
+        dfq = donut_base[
+            (donut_base["FinancialYear"] == fy) &
+            (donut_base["FYQuarter"] == q)
+        ]
+
+        # fallback to full data if filters remove it
+        if dfq.empty:
+            dfq = donut_df[
+                (donut_df["FinancialYear"] == fy) &
+                (donut_df["FYQuarter"] == q)
+            ]
+
+        # if still empty → skip (true no-data case)
+        if dfq.empty:
+            continue
+
+        st.markdown(f"### {fy} — {q}")
+
+        col1, col2 = st.columns(2)
+
+        # ------------------------
+        # Region donut
+        # ------------------------
+        with col1:
+            reg = (
+                dfq.groupby("Region Name", as_index=False)[metric]
+                .sum()
+                .sort_values(metric, ascending=False)
+            )
+
+            fig_reg = px.pie(
                 reg,
                 names="Region Name",
                 values=metric,
-                hole=0.45,
-                title="Region-wise Distribution"
+                hole=0.5,
             )
-            st.plotly_chart(fig, use_container_width=True)
 
-        with c2:
-            stt = dfq.groupby("State Name", as_index=False, observed=False)[metric].sum()
-            fig = px.pie(
+            fig_reg.update_traces(
+                textinfo="percent+label",
+                textfont_size=12
+            )
+
+            st.plotly_chart(fig_reg, use_container_width=True)
+
+        # ------------------------
+        # State donut
+        # ------------------------
+        with col2:
+            stt = (
+                dfq.groupby("State Name", as_index=False)[metric]
+                .sum()
+                .sort_values(metric, ascending=False)
+            )
+
+            fig_state = px.pie(
                 stt,
                 names="State Name",
                 values=metric,
-                hole=0.45,
-                title="State-wise Distribution"
+                hole=0.5,
             )
-            st.plotly_chart(fig, use_container_width=True)
+
+            fig_state.update_traces(
+                textinfo="percent",
+                textfont_size=11
+            )
+
+            st.plotly_chart(fig_state, use_container_width=True)
 
         st.markdown("---")
 
-    available_quarters = (
-        donut_base["FYQuarter"]
-        .dropna()
-        .unique()
-        .tolist()
-    )
-
-    # Sort FY quarters in correct order
-    quarter_order = ["Q1", "Q2", "Q3", "Q4"]
-    available_quarters = [q for q in quarter_order if q in available_quarters]
-
-    for q in available_quarters:
-        donut_pair(q)
-
     # ============================================================
-    # SECTION 3 — TOP SKUs (FY QUARTERS)
+    # 3. TOP SKUS (FIXED MULTI FY)
     # ============================================================
     st.subheader(f"Top 10 SKUs — Quarter-wise ({metric})")
 
     sku_base = apply_tab1_filters(sku_df)
-    sku_base = filter_by_fy(sku_base, selected_fy)
+    sku_base = sku_base[sku_base["FinancialYear"].isin(selected_fys)]
 
-    quarter_order = ["Q1", "Q2", "Q3", "Q4"]
-    available_quarters = [
-        q for q in quarter_order
-        if q in sku_base["FYQuarter"].unique()
-    ]
+    fy_quarter_pairs = (
+        sku_base[["FinancialYear","FYQuarter"]]
+        .dropna()
+        .drop_duplicates()
+    )
 
-    def render_top_skus_table(fy_quarter):
-        dfq = sku_base[sku_base["FYQuarter"] == fy_quarter]
+    fy_quarter_pairs["sort"] = fy_quarter_pairs["FYQuarter"].map(order_map)
+    fy_quarter_pairs = fy_quarter_pairs.sort_values(["FinancialYear","sort"])
+
+    for _, row in fy_quarter_pairs.iterrows():
+
+        fy = row["FinancialYear"]
+        q = row["FYQuarter"]
+
+        dfq = sku_base[
+            (sku_base["FinancialYear"] == fy) &
+            (sku_base["FYQuarter"] == q)
+        ]
 
         if dfq.empty:
-            return
+            continue
 
-        st.markdown(f"### {fy_quarter}")
+        st.markdown(f"### {fy} — {q}")
 
-        # Aggregate using L3 (backend logic)
         dfq = (
-            dfq
-            .groupby(
-                ["L3 Category", "Parent Category", "L1 Category"],
+            dfq.groupby(
+                ["L3 Category","Parent Category","L1 Category"],
                 as_index=False
             )[metric]
             .sum()
-        )
-
-        dfq = (
-            dfq
             .sort_values(metric, ascending=False)
             .head(10)
-            .reset_index(drop=True)
         )
 
-        # 👇 Rename for UI ONLY
-        dfq = dfq.rename(columns={"L3 Category": "Normalised Item Name"})
-
+        dfq = dfq.rename(columns={"L3 Category":"Normalised Item Name"})
         dfq[f"{metric} (₹)"] = dfq[metric].apply(format_indian)
 
         st.dataframe(
             dfq[
-                [
-                    "Normalised Item Name",
-                    "Parent Category",
-                    "L1 Category",
-                    f"{metric} (₹)",
-                ]
+                ["Normalised Item Name","Parent Category","L1 Category",f"{metric} (₹)"]
             ],
             use_container_width=True
         )
 
         st.markdown("---")
 
-    for q in available_quarters:
-        render_top_skus_table(q)
-
-
     # ============================================================
-    # SECTION 4 — STATE PERFORMANCE (FY QUARTERS)
+    # 4. STATE PERFORMANCE (SINGLE TABLE — MULTI FY)
     # ============================================================
     st.subheader("State Performance — Quarter-wise")
 
     df_state = apply_tab1_filters(state_q_df)
-    df_state = filter_by_fy(df_state, selected_fy)
+    df_state = df_state[df_state["FinancialYear"].isin(selected_fys)]
 
     if df_state.empty:
         st.info("No data available for selected filters.")
         st.stop()
 
-    quarter_order = ["Q1", "Q2", "Q3", "Q4"]
-    available_quarters = [
-        q for q in quarter_order
-        if q in df_state["FYQuarter"].unique()
-    ]
+    # --- Create combined column: FY + Quarter ---
+    df_state["FY_Q"] = df_state["FinancialYear"] + " " + df_state["FYQuarter"]
 
+    # --- Define correct order ---
+    order_map = {"Q1":1,"Q2":2,"Q3":3,"Q4":4}
+
+    df_state["q_order"] = df_state["FYQuarter"].map(order_map)
+
+    # sort properly
+    df_state = df_state.sort_values(["FinancialYear", "q_order"])
+
+    # --- Pivot ---
     pivot = (
         df_state
-        .groupby(["State Name", "FYQuarter"], as_index=False, observed=False)[metric]
+        .groupby(["State Name", "FY_Q"], as_index=False)[metric]
         .sum()
-        .pivot(index="State Name", columns="FYQuarter", values=metric)
+        .pivot(index="State Name", columns="FY_Q", values=metric)
         .fillna(0)
     )
 
-    pivot = pivot[available_quarters]
-
-    pivot["Total"] = pivot.sum(axis=1)
-    pivot = pivot.sort_values("Total", ascending=False).drop(columns="Total")
-
-    for q in available_quarters:
-        pivot[q] = pivot[q].apply(format_indian)
-
-    pivot = pivot.reset_index()
-    pivot.insert(0, "S.No", range(1, len(pivot) + 1))
-
-    st.dataframe(
-        pivot,
-        use_container_width=True
+    # --- Ensure correct column order ---
+    ordered_cols = (
+        df_state[["FY_Q","FinancialYear","q_order"]]
+        .drop_duplicates()
+        .sort_values(["FinancialYear","q_order"])["FY_Q"]
+        .tolist()
     )
+
+    pivot = pivot[ordered_cols]
+
+    # --- Format ---
+    for col in pivot.columns:
+        pivot[col] = pivot[col].apply(format_indian)
+
+    # --- Final table ---
+    pivot = pivot.reset_index()
+    pivot.insert(0, "Sl. No.", range(1, len(pivot)+1))
+
+    st.dataframe(pivot, use_container_width=True)
     
 # ============================================================
 # TAB 2 — TOP MARKETS (FY SAFE)
@@ -638,7 +829,7 @@ with tab2:
     # APPLY FILTERS + FY FILTER
     # --------------------------------------------------------
     df2 = tab2_df.copy()
-    df2 = filter_by_fy(df2, selected_fy)
+    df2 = df2[df2["FinancialYear"].isin(selected_fys)]
 
     if parent_cat_sel:
         df2 = df2[df2["Parent Category"].isin(parent_cat_sel)]
@@ -656,7 +847,7 @@ with tab2:
         st.stop()
 
     # --------------------------------------------------------
-    # HELPER — TOP 70% STATES (BASED ON BASELINE FY QUARTER)
+    # TOP 70% STATES
     # --------------------------------------------------------
     def get_top70_states(dfin, metric):
         state_tot = (
@@ -675,25 +866,28 @@ with tab2:
     plot_df = df2[df2["State Name"].isin(top_states)]
 
     # --------------------------------------------------------
-    # MONTH ORDER (FY SAFE)
+    # MONTH ORDER
     # --------------------------------------------------------
     month_order = get_month_order(plot_df)
 
     trend_df = (
         plot_df
         .groupby(
-            ["State Name", "FYMonthOrder", "MonthLabel"],
+            ["FinancialYear", "FYMonthOrder", "MonthLabel", "State Name"],
             as_index=False,
             observed=False
         )[metric_tab2]
         .sum()
-        .sort_values("FYMonthOrder")
     )
 
     trend_df = enforce_month_order(trend_df, month_order)
+    trend_df = add_fy_month_axis(trend_df)
+
+    # ✅ FIX: correct ordering
+    trend_df = trend_df.sort_values("FYMonthKey")
 
     # --------------------------------------------------------
-    # LEGEND ORDER (BY TOTAL CONTRIBUTION)
+    # LEGEND ORDER
     # --------------------------------------------------------
     state_order = (
         trend_df
@@ -708,15 +902,21 @@ with tab2:
     # --------------------------------------------------------
     fig = px.line(
         trend_df,
-        x="MonthLabel",
+        x="FYMonthKey",
         y=metric_tab2,
         color="State Name",
         markers=True,
         text=trend_df[metric_tab2].apply(format_indian),
         category_orders={
-            "MonthLabel": month_order,
+            "FYMonthKey": trend_df["FYMonthKey"].drop_duplicates().tolist(),
             "State Name": state_order
         }
+    )
+
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=trend_df["FYMonthKey"],
+        ticktext=trend_df["MonthLabel"]
     )
 
     fig.update_traces(textposition="top center")
@@ -728,6 +928,8 @@ with tab2:
         tickvals=y_ticks,
         ticktext=[format_indian(v, decimals=0) for v in y_ticks]
     )
+
+    fig = add_fy_divider(fig, trend_df, selected_fys)
 
     st.plotly_chart(fig, use_container_width=True)
 
@@ -792,8 +994,8 @@ with tab3:
     # ----------------------------
     # APPLY FILTERS + FY FILTER
     # ----------------------------
-    df_month = filter_by_fy(tab3_month_df.copy(), selected_fy)
-    df_total = filter_by_fy(tab3_total_df.copy(), selected_fy)
+    df_month = tab3_month_df[tab3_month_df["FinancialYear"].isin(selected_fys)].copy()
+    df_total = tab3_total_df[tab3_total_df["FinancialYear"].isin(selected_fys)].copy()
 
     if parent_sel:
         df_month = df_month[df_month["Parent Category"].isin(parent_sel)]
@@ -816,7 +1018,7 @@ with tab3:
         st.stop()
 
     # ----------------------------
-    # TOP 70% STATES (BASELINE FY QUARTER)
+    # TOP 70% STATES
     # ----------------------------
     baseline_df = df_month[df_month["FYQuarter"] == baseline_q]
 
@@ -837,7 +1039,7 @@ with tab3:
     df_month = df_month[df_month["State Name"].isin(top_states)]
 
     # ----------------------------
-    # BASELINE vs COMPARE (MONTH AVG)
+    # BASELINE vs COMPARE
     # ----------------------------
     base_avg = (
         df_month[df_month["FYQuarter"] == baseline_q]
@@ -861,7 +1063,7 @@ with tab3:
     )
 
     # ----------------------------
-    # SPLIT GROWTH / LAGGARDS
+    # SPLIT
     # ----------------------------
     growth_pos = (
         growth_df[growth_df["Growth %"] > 0]
@@ -882,9 +1084,7 @@ with tab3:
 
     with c1:
         st.subheader(f"Top Growth — {compare_q} vs {baseline_q}")
-        if growth_pos.empty:
-            st.info("No growth states.")
-        else:
+        if not growth_pos.empty:
             fig = px.bar(
                 growth_pos,
                 x="Growth %",
@@ -897,9 +1097,7 @@ with tab3:
 
     with c2:
         st.subheader(f"Top Laggards — {compare_q} vs {baseline_q}")
-        if growth_neg.empty:
-            st.info("No laggard states.")
-        else:
+        if not growth_neg.empty:
             fig = px.bar(
                 growth_neg,
                 x="Growth %",
@@ -911,25 +1109,19 @@ with tab3:
             st.plotly_chart(fig, use_container_width=True)
 
     # ----------------------------
-    # DRILL-DOWN — MONTHLY TRENDS
+    # DRILL-DOWN
     # ----------------------------
     st.markdown("---")
     st.subheader("Monthly Trends — Drill-down")
 
     month_order = get_month_order(df_month)
-    df_month = enforce_month_order(df_month, month_order)
 
-    # ----------------------------
-    # GROWTH CHART
-    # ----------------------------
-
+    # -------- GROWTH --------
     st.markdown("### Growth States — Monthly Trend")
 
     growth_states = growth_pos["State Name"].tolist()
 
-    if not growth_states:
-        st.info("No growth states to display.")
-    else:
+    if growth_states:
         selected_growth_states = st.multiselect(
             "Select Growth States",
             options=growth_states,
@@ -937,58 +1129,45 @@ with tab3:
             key="growth_state_selector"
         )
 
-        if not selected_growth_states:
-            st.info("Select at least one state to view the trend.")
-        else:
-            growth_trend = (
-                df_month[df_month["State Name"].isin(selected_growth_states)]
-                .groupby(
-                    ["State Name", "FYMonthOrder", "MonthLabel"],
-                    as_index=False,
-                    observed=False
-                )[metric]
-                .sum()
-                .sort_values("FYMonthOrder")
-            )
+        growth_trend = (
+            df_month[df_month["State Name"].isin(selected_growth_states)]
+            .groupby(
+                ["FinancialYear", "FYMonthOrder", "MonthLabel", "State Name"],
+                as_index=False,
+                observed=False
+            )[metric]
+            .sum()
+        )
 
-            # Remove zero months
-            growth_trend = growth_trend[growth_trend[metric] > 0]
+        growth_trend = enforce_month_order(growth_trend, month_order)
+        growth_trend = add_fy_month_axis(growth_trend)
+        growth_trend = growth_trend.sort_values("FYMonthKey")
 
-            fig = px.line(
-                growth_trend,
-                x="MonthLabel",
-                y=metric,
-                color="State Name",
-                markers=True,
-                text=growth_trend[metric].apply(format_indian),
-                category_orders={"MonthLabel": month_order}
-            )
+        fig = px.line(
+            growth_trend,
+            x="FYMonthKey",
+            y=metric,
+            color="State Name",
+            markers=True,
+            text=growth_trend[metric].apply(format_indian),
+            category_orders={"FYMonthKey": growth_trend["FYMonthKey"].drop_duplicates().tolist()}
+        )
 
-            fig.update_traces(
-                textposition="top center",
-                textfont=dict(size=11)
-            )
+        fig.update_xaxes(
+            tickmode="array",
+            tickvals=growth_trend["FYMonthKey"],
+            ticktext=growth_trend["MonthLabel"]
+        )
 
-            y_max = growth_trend[metric].max()
-            fig.update_yaxes(
-                tickvals=np.linspace(0, y_max, 6),
-                ticktext=[format_indian(v, 0) for v in np.linspace(0, y_max, 6)]
-            )
+        fig = add_fy_divider(fig, growth_trend, selected_fys)
+        st.plotly_chart(fig, use_container_width=True)
 
-            st.plotly_chart(fig, use_container_width=True)
-
-    
-    # ----------------------------
-    # LAGGARD CHART
-    # ----------------------------
-
+    # -------- LAGGARD --------
     st.markdown("### Laggard States — Monthly Trend")
 
     laggard_states = growth_neg["State Name"].tolist()
 
-    if not laggard_states:
-        st.info("No laggard states for the selected comparison.")
-    else:
+    if laggard_states:
         selected_laggard_states = st.multiselect(
             "Select Laggard States",
             options=laggard_states,
@@ -996,55 +1175,48 @@ with tab3:
             key="laggard_state_selector"
         )
 
-        if not selected_laggard_states:
-            st.info("Select at least one state to view the trend.")
-        else:
-            laggard_trend = (
-                df_month[df_month["State Name"].isin(selected_laggard_states)]
-                .groupby(
-                    ["State Name", "FYMonthOrder", "MonthLabel"],
-                    as_index=False,
-                    observed=False
-                )[metric]
-                .sum()
-                .sort_values("FYMonthOrder")
-            )
+        laggard_trend = (
+            df_month[df_month["State Name"].isin(selected_laggard_states)]
+            .groupby(
+                ["FinancialYear", "FYMonthOrder", "MonthLabel", "State Name"],
+                as_index=False,
+                observed=False
+            )[metric]
+            .sum()
+        )
 
-            # Remove zero months
-            laggard_trend = laggard_trend[laggard_trend[metric] > 0]
+        laggard_trend = enforce_month_order(laggard_trend, month_order)
+        laggard_trend = add_fy_month_axis(laggard_trend)
+        laggard_trend = laggard_trend.sort_values("FYMonthKey")
 
-            fig = px.line(
-                laggard_trend,
-                x="MonthLabel",
-                y=metric,
-                color="State Name",
-                markers=True,
-                text=laggard_trend[metric].apply(format_indian),
-                category_orders={"MonthLabel": month_order}
-            )
+        fig = px.line(
+            laggard_trend,
+            x="FYMonthKey",
+            y=metric,
+            color="State Name",
+            markers=True,
+            text=laggard_trend[metric].apply(format_indian),
+            category_orders={"FYMonthKey": laggard_trend["FYMonthKey"].drop_duplicates().tolist()}
+        )
 
-            fig.update_traces(
-                textposition="top center",
-                textfont=dict(size=11)
-            )
+        fig.update_xaxes(
+            tickmode="array",
+            tickvals=laggard_trend["FYMonthKey"],
+            ticktext=laggard_trend["MonthLabel"]
+        )
 
-            y_max = laggard_trend[metric].max()
-            fig.update_yaxes(
-                tickvals=np.linspace(0, y_max, 6),
-                ticktext=[format_indian(v, 0) for v in np.linspace(0, y_max, 6)]
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
+        fig = add_fy_divider(fig, laggard_trend, selected_fys)
+        st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
-# TAB 4 — INDUSTRY VIEW (FINAL FINAL WITH DEFAULTS)
+# TAB 4 — INDUSTRY VIEW (FIXED FOR MULTI FY)
 # ============================================================
 with tab4:
 
     st.title("Industry View")
 
     # ----------------------------
-    # SIDEBAR FILTERS (SMART DEFAULTS)
+    # SIDEBAR FILTERS
     # ----------------------------
     with st.sidebar:
         st.header("Industry Filters")
@@ -1060,7 +1232,6 @@ with tab4:
         city_options = sorted(tab4_df["City Name"].dropna().unique())
         category_options = sorted(tab4_df["Parent Category"].dropna().unique())
 
-        # ✅ DEFAULTS
         default_platform = ["Blinkit"] if "Blinkit" in platform_options else []
         default_cities = [c for c in ["PAN India", "Bengaluru-Metro", "Mumbai-Metro"] if c in city_options]
         default_category = ["Indian Sweets"] if "Indian Sweets" in category_options else []
@@ -1070,17 +1241,15 @@ with tab4:
         category_sel = st.multiselect("Parent Category", category_options, default=default_category)
 
     # ----------------------------
-    # APPLY FILTERS (EMPTY = ALL)
+    # APPLY FILTERS
     # ----------------------------
     df4 = tab4_df.copy()
-    df4 = filter_by_fy(df4, selected_fy)
+    df4 = df4[df4["FinancialYear"].isin(selected_fys)]
 
     if platform_sel:
         df4 = df4[df4["Platform"].isin(platform_sel)]
-
     if city_sel:
         df4 = df4[df4["City Name"].isin(city_sel)]
-
     if category_sel:
         df4 = df4[df4["Parent Category"].isin(category_sel)]
 
@@ -1103,16 +1272,15 @@ with tab4:
         share_col = "Market_Share_SP"
 
     # ============================================================
-    # GRAPH 1 — MARKET SHARE (MULTI LINE)
+    # GRAPH 1 — MARKET SHARE
     # ============================================================
     st.subheader("GO DESi Market Share Trend (%)")
 
     share_df = (
         df4
-        .groupby(["FYMonthOrder", "MonthLabel", "City Name"], as_index=False)
+        .groupby(["FinancialYear","FYMonthOrder","MonthLabel","City Name"], as_index=False)
         [[godesi_col, industry_col]]
         .sum()
-        .sort_values("FYMonthOrder")
     )
 
     share_df[share_col] = np.where(
@@ -1122,37 +1290,46 @@ with tab4:
     )
 
     share_df = enforce_month_order(share_df, month_order)
+    share_df = add_fy_month_axis(share_df)
+    share_df = share_df.sort_values("FYMonthKey")
 
     fig = px.line(
         share_df,
-        x="MonthLabel",
+        x="FYMonthKey",
         y=share_col,
         color="City Name",
         markers=True,
         text=share_df[share_col].apply(format_pct),
-        category_orders={"MonthLabel": month_order}
+        category_orders={"FYMonthKey": share_df["FYMonthKey"].drop_duplicates().tolist()}
     )
 
-    fig.update_traces(textposition="top center")
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=share_df["FYMonthKey"],
+        ticktext=share_df["MonthLabel"]
+    )
+
+    fig = add_fy_divider(fig, share_df, selected_fys)
     st.plotly_chart(fig, use_container_width=True)
 
     # ============================================================
-    # GRAPH 2 — BAR (SUMMARY)
+    # GRAPH 2 — BAR (NO CHANGE)
     # ============================================================
     st.subheader("Industry Size vs GO DESi")
 
     bar_df = (
         df4
-        .groupby(["FYMonthOrder", "MonthLabel"], as_index=False)
+        .groupby(["FinancialYear","FYMonthOrder","MonthLabel"], as_index=False)
         [[industry_col, godesi_col]]
         .sum()
-        .sort_values("FYMonthOrder")
     )
 
     bar_df = enforce_month_order(bar_df, month_order)
+    bar_df = add_fy_month_axis(bar_df)
+    bar_df = bar_df.sort_values("FYMonthKey")
 
     bar_df_melt = bar_df.melt(
-        id_vars=["MonthLabel"],
+        id_vars=["FYMonthKey","MonthLabel"],
         value_vars=[industry_col, godesi_col],
         var_name="Type",
         value_name="Value"
@@ -1165,77 +1342,172 @@ with tab4:
 
     fig = px.bar(
         bar_df_melt,
-        x="MonthLabel",
+        x="FYMonthKey",
         y="Value",
         color="Type",
         barmode="group",
         text=bar_df_melt["Value"].apply(format_indian),
-        category_orders={"MonthLabel": month_order}
+        category_orders={"FYMonthKey": bar_df["FYMonthKey"].drop_duplicates().tolist()}
     )
 
-    fig.update_traces(textposition="outside")
-
-    y_max = bar_df_melt["Value"].max()
-    fig.update_yaxes(
-        tickvals=np.linspace(0, y_max, 6),
-        ticktext=[format_indian(v, 0) for v in np.linspace(0, y_max, 6)]
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=bar_df["FYMonthKey"],
+        ticktext=bar_df["MonthLabel"]
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
     # ============================================================
-    # GRAPH 3 — INDUSTRY TREND (MULTI LINE)
+    # GRAPH 3 — INDUSTRY TREND
     # ============================================================
     st.subheader("Industry Size Trend")
 
     ind_df = (
         df4
-        .groupby(["FYMonthOrder", "MonthLabel", "City Name"], as_index=False)[industry_col]
+        .groupby(["FinancialYear","FYMonthOrder","MonthLabel","City Name"], as_index=False)[industry_col]
         .sum()
-        .sort_values("FYMonthOrder")
     )
 
     ind_df = enforce_month_order(ind_df, month_order)
+    ind_df = add_fy_month_axis(ind_df)
+    ind_df = ind_df.sort_values("FYMonthKey")
 
     fig = px.line(
         ind_df,
-        x="MonthLabel",
+        x="FYMonthKey",
         y=industry_col,
         color="City Name",
         markers=True,
         text=ind_df[industry_col].apply(format_indian),
-        category_orders={"MonthLabel": month_order}
+        category_orders={"FYMonthKey": ind_df["FYMonthKey"].drop_duplicates().tolist()}
     )
 
-    fig.update_traces(textposition="top center")
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=ind_df["FYMonthKey"],
+        ticktext=ind_df["MonthLabel"]
+    )
+
+    fig = add_fy_divider(fig, ind_df, selected_fys)
     st.plotly_chart(fig, use_container_width=True)
 
     # ============================================================
-    # GRAPH 4 — GO DESi TREND (MULTI LINE)
+    # GRAPH 4 — GO DESi TREND
     # ============================================================
     st.subheader("GO DESi Sales Trend")
 
     gd_df = (
         df4
-        .groupby(["FYMonthOrder", "MonthLabel", "City Name"], as_index=False)[godesi_col]
+        .groupby(["FinancialYear","FYMonthOrder","MonthLabel","City Name"], as_index=False)[godesi_col]
         .sum()
-        .sort_values("FYMonthOrder")
     )
 
     gd_df = enforce_month_order(gd_df, month_order)
+    gd_df = add_fy_month_axis(gd_df)
+    gd_df = gd_df.sort_values("FYMonthKey")
 
     fig = px.line(
         gd_df,
-        x="MonthLabel",
+        x="FYMonthKey",
         y=godesi_col,
         color="City Name",
         markers=True,
         text=gd_df[godesi_col].apply(format_indian),
-        category_orders={"MonthLabel": month_order}
+        category_orders={"FYMonthKey": gd_df["FYMonthKey"].drop_duplicates().tolist()}
     )
 
-    fig.update_traces(textposition="top center")
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=gd_df["FYMonthKey"],
+        ticktext=gd_df["MonthLabel"]
+    )
+
+    fig = add_fy_divider(fig, gd_df, selected_fys)
     st.plotly_chart(fig, use_container_width=True)
+
+    # ------------------------------------------------------------
+    # CITY MAPPINGS (FIXED - NO NESTING)
+    # ------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("City Mappings")
+
+    # ---------- PLATFORM SELECT ----------
+    platform_map_choice = st.selectbox(
+        "Select Platform",
+        ["Blinkit", "Instamart", "Zepto"]
+    )
+
+    # ---------- DATA ----------
+    city_maps = {
+        "Blinkit": {
+            "Bengaluru-Metro": ["Bangalore", "Bengaluru"],
+            "South-T2": ["Kochi", "Vijayawada", "Visakhapatnam", "Vizag", "Guntur"],
+            "West-T2": ["Bhopal", "Goa", "Gwalior", "Indore", "Jaipur", "Jodhpur", "Kota", "Rajkot", "Surat", "Vadodara"],
+            "North-T2": ["Agra", "Amritsar", "Bareilly", "Chandigarh", "Dehradun", "Faridabad", "Ghaziabad", "Gurgaon", "Gurugram", "Jalandhar", "Kanpur", "Lucknow", "Ludhiana", "Meerut", "Mohali", "Noida", "Patiala", "Varanasi"],
+            "East-T2": ["Durgapur", "Jamshedpur", "Ranchi"],
+            "North-T3": ["Bahadurgarh", "Bathinda", "Haridwar", "Kharar", "Panchkula", "Phagwara", "Rohtak", "Roorkee", "Sonipat", "Zirakpur"],
+            "Others": ["Bombay", "HR-NCR", "NorthGoa", "SouthGoa", "UP-NCR"]
+        },
+        "Instamart": {
+            "Bengaluru-Metro": ["Bangalore", "Bengaluru"],
+            "South-T2": ["Coimbatore", "Guntur", "Kochi", "Kozhikode", "Pondicherry", "Thiruvananthapuram", "Vijayawada", "Vizag"],
+            "West-T2": ["Bhopal", "Central Goa", "Indore", "Jaipur", "Nagpur", "Nashik", "Rajkot", "Surat", "Vadodara", "Goa"],
+            "North-T2": ["Amritsar", "Chandigarh", "Dehradun", "Faridabad", "Ghaziabad", "Gurgaon", "Gurugram", "Kanpur", "Lucknow", "Ludhiana", "Noida", "Noida 1", "Varanasi", "Mohali"],
+            "South-T3": ["Mangaluru", "Mysore", "Salem", "Thrissur", "Tirupati", "Trichy", "Warangal"],
+            "East-T2": ["Bhubaneswar", "Ranchi"],
+            "North-T3": ["Panchkula", "Zirakpur"]
+        },
+        "Zepto": {
+            "Bengaluru-Metro": ["Bangalore", "Bengaluru"],
+            "South-T2": ["Coimbatore", "Kochi"],
+            "West-T2": ["Jaipur", "Nashik"],
+            "North-T2": ["Chandigarh", "Mohali", "Faridabad", "Ghaziabad", "Gurgaon", "Gurugram", "Lucknow", "Noida", "SAS Nagar"]
+        }
+    }
+
+    # ---------- DISPLAY (CLEAN UI) ----------
+    selected_map = city_maps.get(platform_map_choice, {})
+
+    # 3 columns layout for neat grid
+    cols = st.columns(3)
+
+    i = 0
+    for grouping, cities in selected_map.items():
+        if not cities:
+            continue
+
+        with cols[i % 3]:
+            st.markdown(
+                f"""
+                <div style="
+                    background-color:#111827;
+                    padding:12px;
+                    border-radius:10px;
+                    margin-bottom:12px;
+                    border:1px solid #1f2937;
+                ">
+                    <div style="
+                        font-weight:600;
+                        font-size:14px;
+                        color:#f97316;
+                        margin-bottom:6px;
+                    ">
+                        {grouping}
+                    </div>
+                    <div style="
+                        font-size:13px;
+                        color:#d1d5db;
+                        line-height:1.5;
+                    ">
+                        {", ".join(cities)}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        i += 1
 
 # ------------------------------------------------------------
 # TAB 5 — P-TYPE DEEP DIVE (CLOUD SAFE)
